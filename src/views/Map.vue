@@ -114,28 +114,29 @@
                 <canvas ref="canvas" @click="drawPixel" @mousemove="handleMouseMove" @mouseleave="hidePreview"
                     @touchstart="handleCanvasTouchStart" @touchmove="handleCanvasTouchMove" @touchend="handleCanvasTouchEnd"
                     :style="{ cursor: isPanning ? 'grabbing' : (isColorPicking ? 'copy' : 'crosshair') }"></canvas>
+            </div>
 
-                <!-- 像素预览 -->
-                <div v-if="previewPixel.show && !isColorPicking" class="pixel-preview" :style="{
-                    left: previewPixel.x + 'px',
-                    top: previewPixel.y + 'px',
-                    backgroundColor: selectedColor
-                }"></div>
-                
-                <!-- 像素悬停提示 -->
-                <div v-if="pixelTooltip.show" class="pixel-tooltip" :style="{
-                    left: pixelTooltip.x + 'px',
-                    top: pixelTooltip.y + 'px'
-                }">
-                    <div class="tooltip-content">
-                        <div class="tooltip-position">{{ $t('coordinates') }}: ({{ pixelTooltip.pixelX }}, {{ pixelTooltip.pixelY }})</div>
-                        <div class="tooltip-user" :class="{ 'own-pixel': pixelTooltip.isOwnPixel }">
-                            {{ pixelTooltip.isOwnPixel ? $t('ownPixel') : $t('userId') + ': ' + pixelTooltip.userId }}
-                        </div>
+            <!-- 像素预览 -->
+            <div v-if="previewPixel.show && !isColorPicking" class="pixel-preview" :style="{
+                left: previewPixel.x + 'px',
+                top: previewPixel.y + 'px',
+                width: (pixelSize * zoomLevel) + 'px',
+                height: (pixelSize * zoomLevel) + 'px',
+                backgroundColor: selectedColor,
+                transform: 'translate(-50%, -50%)'
+            }"></div>
+            
+            <!-- 像素悬停提示 -->
+            <div v-if="pixelTooltip.show" class="pixel-tooltip" :style="{
+                left: pixelTooltip.x + 'px',
+                top: pixelTooltip.y + 'px'
+            }">
+                <div class="tooltip-content">
+                    <div class="tooltip-position">{{ $t('coordinates') }}: ({{ pixelTooltip.pixelX }}, {{ pixelTooltip.pixelY }})</div>
+                    <div class="tooltip-user" :class="{ 'own-pixel': pixelTooltip.isOwnPixel }">
+                        {{ pixelTooltip.isOwnPixel ? $t('ownPixel') : $t('userId') + ': ' + pixelTooltip.userId }}
                     </div>
                 </div>
-                
-
             </div>
         </div>
 
@@ -730,8 +731,8 @@ export default {
                 // 普通模式下的预览
                 this.previewPixel = {
                     show: true,
-                    x: x / scaleX,
-                    y: y / scaleY
+                    x: event.clientX,
+                    y: event.clientY
                 }
 
                 // 检查是否有像素存在
@@ -740,12 +741,10 @@ export default {
                 
                 if (pixelInfo) {
                     // 显示像素悬停提示
-                    const mouseXOnCanvas = event.clientX - rect.left
-                    const mouseYOnCanvas = event.clientY - rect.top
                     this.pixelTooltip = {
                         show: true,
-                        x: mouseXOnCanvas + 10,
-                        y: mouseYOnCanvas - 30,
+                        x: event.clientX + 15,
+                        y: event.clientY + 15,
                         pixelX: x,
                         pixelY: y,
                         userId: pixelInfo.userId,
@@ -979,6 +978,16 @@ export default {
          */
         async handleLogin(userId) {
             try {
+                // 验证用户ID是否以'user_'开头
+                if (!userId.startsWith('user_')) {
+                    this.showError(
+                        this.$t('loginFailed'),
+                        this.$t('userIdPrefixRequired'),
+                        null
+                    )
+                    return
+                }
+                
                 await this.setLoadingState(true)
                 
                 // 验证用户是否存在
@@ -1015,6 +1024,16 @@ export default {
          */
         async handleCreateUser(userId) {
             try {
+                // 验证用户ID是否以'user_'开头
+                if (!userId.startsWith('user_')) {
+                    this.showError(
+                        this.$t('createUserFailed'),
+                        this.$t('userIdPrefixRequired'),
+                        null
+                    )
+                    return
+                }
+                
                 await this.setLoadingState(true)
                 
                 // 检查用户ID是否已存在
@@ -1103,18 +1122,63 @@ export default {
                 // 保存新像素到GlobalPixels云端
                 const GlobalPixels = AV.Object.extend('GlobalPixels')
                 
-                // 为每个新像素创建单独的记录
+                // 为每个新像素创建或更新记录
                 const savePromises = []
-                this.userAddedPixels.forEach((pixelInfo, key) => {
+                let savedCount = 0
+                let skippedCount = 0
+                
+                for (const [key, pixelInfo] of this.userAddedPixels) {
                     const [x, y] = key.split(',').map(Number)
-                    const pixelRecord = new GlobalPixels()
-                    pixelRecord.set('x', x)
-                    pixelRecord.set('y', y)
-                    pixelRecord.set('color', pixelInfo.color)
-                    pixelRecord.set('userId', pixelInfo.userId)
-                    pixelRecord.set('timestamp', pixelInfo.timestamp)
-                    savePromises.push(pixelRecord.save())
-                })
+                    
+                    // 查询是否存在相同坐标的像素
+                    const query = new AV.Query('GlobalPixels')
+                    query.equalTo('x', x)
+                    query.equalTo('y', y)
+                    
+                    try {
+                        const existingPixel = await query.first()
+                        if (existingPixel) {
+                            // 获取现有像素的时间戳
+                            const existingTimestamp = existingPixel.get('timestamp')
+                            const newTimestamp = pixelInfo.timestamp
+                            
+                            // 只有当新像素的时间戳更新时才更新数据
+                            if (newTimestamp > existingTimestamp) {
+                                existingPixel.set('color', pixelInfo.color)
+                                existingPixel.set('userId', pixelInfo.userId)
+                                existingPixel.set('timestamp', pixelInfo.timestamp)
+                                savePromises.push(existingPixel.save())
+                                savedCount++
+                                console.log(`更新像素 (${x},${y}): 新时间戳 ${newTimestamp.toISOString()} > 旧时间戳 ${existingTimestamp.toISOString()}`)
+                            } else {
+                                skippedCount++
+                                console.log(`跳过像素 (${x},${y}): 新时间戳 ${newTimestamp.toISOString()} <= 旧时间戳 ${existingTimestamp.toISOString()}`)
+                            }
+                        } else {
+                            // 如果不存在，创建新记录
+                            const pixelRecord = new GlobalPixels()
+                            pixelRecord.set('x', x)
+                            pixelRecord.set('y', y)
+                            pixelRecord.set('color', pixelInfo.color)
+                            pixelRecord.set('userId', pixelInfo.userId)
+                            pixelRecord.set('timestamp', pixelInfo.timestamp)
+                            savePromises.push(pixelRecord.save())
+                            savedCount++
+                            console.log(`创建新像素 (${x},${y})`)
+                        }
+                    } catch (error) {
+                        console.error('查询像素时出错:', error)
+                        // 如果查询失败，创建新记录
+                        const pixelRecord = new GlobalPixels()
+                        pixelRecord.set('x', x)
+                        pixelRecord.set('y', y)
+                        pixelRecord.set('color', pixelInfo.color)
+                        pixelRecord.set('userId', pixelInfo.userId)
+                        pixelRecord.set('timestamp', pixelInfo.timestamp)
+                        savePromises.push(pixelRecord.save())
+                        savedCount++
+                    }
+                }
 
                 await Promise.all(savePromises)
                 
@@ -1124,7 +1188,7 @@ export default {
                 this.lastSaved = new Date()
                 this.hasUnsavedChanges = false // 清除未保存更改标记
 
-                console.log(`已保存 ${savePromises.length} 个新像素到GlobalPixels云端`)
+                console.log(`保存完成: ${savedCount} 个像素已保存，${skippedCount} 个像素因时间戳较旧被跳过，总计处理 ${this.userAddedPixels.size} 个像素`)
             } catch (error) {
                 console.error(this.$t('saveFailed') + ':', error)
                 this.showError(
@@ -1683,8 +1747,6 @@ canvas {
 /* 像素预览样式 */
 .pixel-preview {
     position: fixed;
-    width: 4px;
-    height: 4px;
     pointer-events: none;
     border: 1px solid #333;
     z-index: 1000;

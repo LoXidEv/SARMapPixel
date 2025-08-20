@@ -54,6 +54,7 @@
     "loadFailed": "Load failed, please try again",
     "loginFailed": "Login failed, please try again",
     "userIdExists": "User ID already exists, please choose another ID or login directly",
+    "userIdPrefixRequired": "Invalid user ID format",
     "createUserFailed": "Create user failed, please try again",
     "coordinates": "Coordinates",
     "pixelPosition": "Pixel Position",

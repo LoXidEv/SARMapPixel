@@ -54,6 +54,7 @@
     "loadFailed": "加載失敗，請重試",
     "loginFailed": "登錄失敗，請重試",
     "userIdExists": "用戶ID已存在，請選擇其他ID或直接登錄",
+    "userIdPrefixRequired": "用戶ID格式不正確",
     "createUserFailed": "創建用戶失敗，請重試",
     "coordinates": "坐標",
     "pixelPosition": "像素位置",
