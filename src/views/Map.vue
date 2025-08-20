@@ -664,14 +664,9 @@ export default {
                     this.drawAllPixels()
                     // 标记有未保存的更改
                     this.hasUnsavedChanges = true
-                } else {
-                    this.showError(
-                        this.$t('errorOccurred'),
-                        this.$t('cannotEraseOthersPixels'),
-                        null
-                    )
-                    return
                 }
+                // 在橡皮擦模式下，无论是否成功擦除，都直接返回，不执行后续的绘制逻辑
+                return
             } else {
                 // 更新像素数据
                 const pixelInfo = {
@@ -735,8 +730,8 @@ export default {
                 // 普通模式下的预览
                 this.previewPixel = {
                     show: true,
-                    x: x / scaleX + rect.left,
-                    y: y / scaleY + rect.top
+                    x: x / scaleX,
+                    y: y / scaleY
                 }
 
                 // 检查是否有像素存在
@@ -745,10 +740,12 @@ export default {
                 
                 if (pixelInfo) {
                     // 显示像素悬停提示
+                    const mouseXOnCanvas = event.clientX - rect.left
+                    const mouseYOnCanvas = event.clientY - rect.top
                     this.pixelTooltip = {
                         show: true,
-                        x: event.clientX + 10,
-                        y: event.clientY - 30,
+                        x: mouseXOnCanvas + 10,
+                        y: mouseYOnCanvas - 30,
                         pixelX: x,
                         pixelY: y,
                         userId: pixelInfo.userId,
