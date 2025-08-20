@@ -103,8 +103,10 @@
         <!-- 画布容器 -->
         <div class="canvas-container" ref="canvasContainer">
             <div class="canvas-wrapper" :style="{ transform: `scale(${zoomLevel}) translate(${panX}px, ${panY}px)` }"
-                @mousedown="startPan" @mousemove="handlePan" @mouseup="endPan" @mouseleave="endPan">
+                @mousedown="startPan" @mousemove="handlePan" @mouseup="endPan" @mouseleave="endPan"
+                @touchstart="handleTouchStart" @touchmove="handleTouchMove" @touchend="handleTouchEnd">
                 <canvas ref="canvas" @click="drawPixel" @mousemove="handleMouseMove" @mouseleave="hidePreview"
+                    @touchstart="handleCanvasTouchStart" @touchmove="handleCanvasTouchMove" @touchend="handleCanvasTouchEnd"
                     :style="{ cursor: isPanning ? 'grabbing' : 'crosshair' }"></canvas>
 
                 <!-- 像素预览 -->
@@ -248,7 +250,19 @@ export default {
                 message: '',
                 showRetry: true,
                 retryAction: null
-            }
+            },
+
+            // 触摸相关状态
+            touchState: {
+                isTouching: false,
+                lastTouchPoint: null,
+                touchStartTime: 0,
+                isPanningTouch: false
+            },
+
+            // 本地缓存
+            localCache: new Map(), // 存储本地操作的像素
+            cacheCheckInterval: null // 缓存检查定时器
         }
     },
 
@@ -274,6 +288,12 @@ export default {
         // 清理定时器
         clearTimeout(this.autoSaveTimer)
         clearInterval(this.countdownTimer)
+        
+        // 清理缓存检查定时器
+        if (this.cacheCheckInterval) {
+            clearInterval(this.cacheCheckInterval)
+            this.cacheCheckInterval = null
+        }
     },
 
     methods: {
@@ -385,7 +405,7 @@ export default {
                     resolve() // 即使图片加载失败也要resolve，让应用继续运行
                 }
 
-                this.mapImage.src = '/img/Map.png'
+                this.mapImage.src = '/img/Map.webp'
             })
         },
 
@@ -510,6 +530,8 @@ export default {
                     this.ctx.clearRect(x, y, this.pixelSize, this.pixelSize)
                     this.drawBackground()
                     this.drawAllPixels()
+                    // 从本地缓存移除
+                    this.removeFromLocalCache(key)
                 } else {
                     this.showError(
                         this.$t('errorOccurred'),
@@ -523,11 +545,13 @@ export default {
                 const pixelInfo = {
                     color: this.selectedColor,
                     userId: this.currentUserId,
-                    timestamp: Date.now()
+                    timestamp: new Date()
                 }
                 this.pixelData.set(key, pixelInfo)
                 // 绘制像素
                 this.drawSinglePixel(x, y, this.selectedColor)
+                // 添加到本地缓存
+                this.addToLocalCache(key, pixelInfo)
             }
 
             // 自动保存到云端
@@ -1042,6 +1066,285 @@ export default {
                 this.clearError()
                 this.errorState.retryAction()
             }
+        },
+
+        /**
+         * 处理画布包装器的触摸开始事件
+         */
+        handleTouchStart(event) {
+            if (event.touches.length === 1) {
+                const touch = event.touches[0]
+                this.touchState.isTouching = true
+                this.touchState.lastTouchPoint = { x: touch.clientX, y: touch.clientY }
+                this.touchState.touchStartTime = Date.now()
+                this.touchState.isPanningTouch = false
+            }
+        },
+
+        /**
+         * 处理画布包装器的触摸移动事件
+         */
+        handleTouchMove(event) {
+            event.preventDefault()
+            if (this.touchState.isTouching && event.touches.length === 1) {
+                const touch = event.touches[0]
+                const deltaX = touch.clientX - this.touchState.lastTouchPoint.x
+                const deltaY = touch.clientY - this.touchState.lastTouchPoint.y
+                const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
+                
+                // 如果移动距离超过阈值，开始平移
+                if (distance > 10 || this.touchState.isPanningTouch) {
+                    this.touchState.isPanningTouch = true
+                    this.isPanning = true
+                    
+                    this.panX += deltaX / this.zoomLevel
+                    this.panY += deltaY / this.zoomLevel
+                    
+                    this.touchState.lastTouchPoint = { x: touch.clientX, y: touch.clientY }
+                }
+            }
+        },
+
+        /**
+         * 处理画布包装器的触摸结束事件
+         */
+        handleTouchEnd(event) {
+            this.touchState.isTouching = false
+            this.isPanning = false
+            this.touchState.isPanningTouch = false
+        },
+
+        /**
+         * 处理画布的触摸开始事件
+         */
+        handleCanvasTouchStart(event) {
+            event.preventDefault()
+            if (event.touches.length === 1) {
+                const touch = event.touches[0]
+                this.touchState.lastTouchPoint = { x: touch.clientX, y: touch.clientY }
+                this.touchState.touchStartTime = Date.now()
+                
+                // 显示触摸预览
+                this.handleTouchMove(event)
+            }
+        },
+
+        /**
+         * 处理画布的触摸移动事件
+         */
+        handleCanvasTouchMove(event) {
+            event.preventDefault()
+            if (event.touches.length === 1 && !this.touchState.isPanningTouch) {
+                const touch = event.touches[0]
+                const rect = this.canvas.getBoundingClientRect()
+                const scaleX = this.canvas.width / rect.width
+                const scaleY = this.canvas.height / rect.height
+
+                const x = Math.floor((touch.clientX - rect.left) * scaleX / this.pixelSize) * this.pixelSize
+                const y = Math.floor((touch.clientY - rect.top) * scaleY / this.pixelSize) * this.pixelSize
+
+                if (x >= 0 && y >= 0 && x < this.canvas.width && y < this.canvas.height) {
+                    // 显示预览
+                    this.previewPixel = {
+                        show: true,
+                        x: x / scaleX + rect.left,
+                        y: y / scaleY + rect.top
+                    }
+
+                    // 检查是否有像素存在
+                    const key = `${x},${y}`
+                    const pixelInfo = this.pixelData.get(key)
+                    
+                    if (pixelInfo) {
+                        this.pixelTooltip = {
+                            show: true,
+                            x: touch.clientX + 10,
+                            y: touch.clientY - 30,
+                            pixelX: x,
+                            pixelY: y,
+                            userId: pixelInfo.userId,
+                            isOwnPixel: pixelInfo.userId === this.currentUserId
+                        }
+                    } else {
+                        this.pixelTooltip.show = false
+                    }
+                } else {
+                    this.previewPixel.show = false
+                    this.pixelTooltip.show = false
+                }
+            }
+        },
+
+        /**
+         * 处理画布的触摸结束事件
+         */
+        handleCanvasTouchEnd(event) {
+            event.preventDefault()
+            
+            // 如果是短时间的触摸且没有平移，则视为点击绘制
+            const touchDuration = Date.now() - this.touchState.touchStartTime
+            if (touchDuration < 300 && !this.touchState.isPanningTouch) {
+                this.drawPixelFromTouch(event.changedTouches[0])
+            }
+            
+            this.hidePreview()
+        },
+
+        /**
+         * 从触摸事件绘制像素
+         */
+        drawPixelFromTouch(touch) {
+            // 检查用户是否已登录
+            if (!this.currentUserId) {
+                this.showLoginModal = true
+                return
+            }
+            
+            if (this.isLoading) return
+
+            const rect = this.canvas.getBoundingClientRect()
+            const scaleX = this.canvas.width / rect.width
+            const scaleY = this.canvas.height / rect.height
+
+            const x = Math.floor((touch.clientX - rect.left) * scaleX / this.pixelSize) * this.pixelSize
+            const y = Math.floor((touch.clientY - rect.top) * scaleY / this.pixelSize) * this.pixelSize
+
+            // 检查坐标是否在画布范围内
+            if (x < 0 || y < 0 || x >= this.canvas.width || y >= this.canvas.height) {
+                return
+            }
+
+            const key = `${x},${y}`
+            const existingPixel = this.pixelData.get(key)
+
+            if (this.isErasing) {
+                // 橡皮擦模式：只能擦除自己的像素
+                if (existingPixel && existingPixel.userId === this.currentUserId) {
+                    this.pixelData.delete(key)
+                    this.drawCanvas()
+                    this.scheduleAutoSave()
+                    this.removeFromLocalCache(key)
+                } else if (existingPixel) {
+                    // 尝试擦除他人像素时显示提示
+                    alert(this.$t('cannotEraseOthersPixels'))
+                }
+            } else {
+                // 绘制模式
+                const pixelInfo = {
+                    color: this.selectedColor,
+                    userId: this.currentUserId,
+                    timestamp: new Date()
+                }
+                
+                this.pixelData.set(key, pixelInfo)
+                this.drawSinglePixel(x, y, this.selectedColor)
+                this.scheduleAutoSave()
+                
+                // 添加到本地缓存
+                this.addToLocalCache(key, pixelInfo)
+            }
+        },
+
+        /**
+         * 添加像素到本地缓存
+         */
+        addToLocalCache(key, pixelInfo) {
+            this.localCache.set(key, {
+                ...pixelInfo,
+                localTimestamp: Date.now()
+            })
+            
+            // 启动缓存检查
+            this.startCacheValidation()
+        },
+
+        /**
+         * 从本地缓存移除像素
+         */
+        removeFromLocalCache(key) {
+            this.localCache.delete(key)
+            
+            // 如果缓存为空，停止检查
+            if (this.localCache.size === 0 && this.cacheCheckInterval) {
+                clearInterval(this.cacheCheckInterval)
+                this.cacheCheckInterval = null
+            }
+        },
+
+        /**
+         * 启动缓存验证
+         */
+        startCacheValidation() {
+            // 如果已经有检查定时器在运行，不重复启动
+            if (this.cacheCheckInterval) {
+                return
+            }
+            
+            // 每5秒检查一次缓存
+            this.cacheCheckInterval = setInterval(() => {
+                this.validateLocalCache()
+            }, 5000)
+        },
+
+        /**
+         * 验证本地缓存
+         */
+        async validateLocalCache() {
+            if (this.localCache.size === 0) {
+                if (this.cacheCheckInterval) {
+                    clearInterval(this.cacheCheckInterval)
+                    this.cacheCheckInterval = null
+                }
+                return
+            }
+            
+            try {
+                // 获取最新的云端数据
+                const cloudData = await this.fetchCloudData()
+                
+                // 检查本地缓存中的像素是否存在于云端
+                const keysToRemove = []
+                
+                for (const [key, localPixel] of this.localCache) {
+                    const cloudPixel = cloudData.get(key)
+                    
+                    // 如果云端存在相同的像素且用户ID匹配，则从缓存中移除
+                    if (cloudPixel && cloudPixel.userId === localPixel.userId) {
+                        keysToRemove.push(key)
+                    }
+                }
+                
+                // 移除已确认的像素
+                keysToRemove.forEach(key => {
+                    this.removeFromLocalCache(key)
+                })
+                
+            } catch (error) {
+                console.error('缓存验证失败:', error)
+            }
+        },
+
+        /**
+         * 获取云端数据（用于缓存验证）
+         */
+        async fetchCloudData() {
+            const PixelData = AV.Object.extend('PixelData')
+            const query = new AV.Query(PixelData)
+            query.limit(1000)
+            
+            const results = await query.find()
+            const cloudData = new Map()
+            
+            results.forEach(result => {
+                const key = `${result.get('x')},${result.get('y')}`
+                cloudData.set(key, {
+                    color: result.get('color'),
+                    userId: result.get('userId'),
+                    timestamp: result.get('timestamp')
+                })
+            })
+            
+            return cloudData
         }
     }
 }
