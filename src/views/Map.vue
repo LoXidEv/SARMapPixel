@@ -105,7 +105,7 @@
             <div class="canvas-wrapper" :style="{ transform: `scale(${zoomLevel}) translate(${panX}px, ${panY}px)` }"
                 @mousedown="startPan" @mousemove="handlePan" @mouseup="endPan" @mouseleave="endPan"
                 @touchstart="handleTouchStart" @touchmove="handleTouchMove" @touchend="handleTouchEnd">
-                <canvas ref="canvas" @click="drawPixel" @mousemove="handleMouseMove" @mouseleave="hidePreview"
+                <canvas ref="canvas" @mousemove="handleMouseMove" @mouseleave="hidePreview"
                     @touchstart="handleCanvasTouchStart" @touchmove="handleCanvasTouchMove" @touchend="handleCanvasTouchEnd"
                     :style="{ cursor: isPanning ? 'grabbing' : 'crosshair' }"></canvas>
 
@@ -195,9 +195,12 @@ export default {
             panY: 0,
             isPanning: false,
             lastPanPoint: { x: 0, y: 0 },
+            panTimer: null, // 长按定时器
+            panStartTime: null, // 长按开始时间
+            panStartPoint: null, // 长按开始位置
 
             // 像素数据
-            pixelData: new Map(), // 存储所有像素数据 {key: {color, userId, timestamp}}
+            pixelData: new Map(), // 存储所有像素数据 {key: {color, userId, timestamp, status: 'saved'|'cached'}}
 
             // 预览
             previewPixel: {
@@ -358,13 +361,33 @@ export default {
          * 加载像素数据（模拟异步操作）
          */
         async loadPixelData() {
-            // 这里可以添加实际的API调用来加载像素数据
-            return new Promise(resolve => {
-                setTimeout(() => {
-                    // 模拟加载完成
-                    resolve()
-                }, 300)
-            })
+            try {
+                // 从GlobalPixels表加载实际的像素数据
+                const GlobalPixels = AV.Object.extend('GlobalPixels')
+                const query = new AV.Query(GlobalPixels)
+                query.limit(1000)
+                
+                const results = await query.find()
+                
+                // 清空现有数据
+                this.pixelData.clear()
+                
+                // 加载云端数据到本地
+                results.forEach(result => {
+                    const key = `${result.get('x')},${result.get('y')}`
+                    this.pixelData.set(key, {
+                        color: result.get('color'),
+                        userId: result.get('userId'),
+                        timestamp: result.get('timestamp'),
+                        status: 'saved' // 从云端加载的像素标记为已保存状态
+                    })
+                })
+                
+                console.log(`已从GlobalPixels加载 ${results.length} 个像素数据`)
+            } catch (error) {
+                console.error('加载像素数据失败:', error)
+                // 即使加载失败也要继续，避免阻塞应用
+            }
         },
 
         /**
@@ -427,16 +450,29 @@ export default {
             this.pixelData.forEach((pixelInfo, key) => {
                 const [x, y] = key.split(',').map(Number)
                 const color = typeof pixelInfo === 'string' ? pixelInfo : pixelInfo.color
-                this.drawSinglePixel(x, y, color)
+                const status = typeof pixelInfo === 'object' ? pixelInfo.status : 'saved'
+                this.drawSinglePixel(x, y, color, status)
             })
         },
 
         /**
          * 绘制单个像素
          */
-        drawSinglePixel(x, y, color) {
+        drawSinglePixel(x, y, color, status = 'saved') {
+            // 根据像素状态设置透明度
+            if (status === 'cached') {
+                // 缓存像素使用50%透明度
+                this.ctx.globalAlpha = 0.5
+            } else {
+                // 正式像素使用100%不透明度
+                this.ctx.globalAlpha = 1.0
+            }
+            
             this.ctx.fillStyle = color
             this.ctx.fillRect(x, y, this.pixelSize, this.pixelSize)
+            
+            // 重置透明度
+            this.ctx.globalAlpha = 1.0
         },
 
         /**
@@ -545,11 +581,12 @@ export default {
                 const pixelInfo = {
                     color: this.selectedColor,
                     userId: this.currentUserId,
-                    timestamp: new Date()
+                    timestamp: new Date(),
+                    status: 'cached' // 新绘制的像素标记为缓存状态
                 }
                 this.pixelData.set(key, pixelInfo)
-                // 绘制像素
-                this.drawSinglePixel(x, y, this.selectedColor)
+                // 绘制像素（缓存状态，带透明度）
+                this.drawSinglePixel(x, y, this.selectedColor, 'cached')
                 // 添加到本地缓存
                 this.addToLocalCache(key, pixelInfo)
             }
@@ -615,9 +652,15 @@ export default {
          * 开始平移
          */
         startPan(event) {
-            if (event.button === 1 || event.ctrlKey) { // 中键或Ctrl+左键
-                this.isPanning = true
-                this.lastPanPoint = { x: event.clientX, y: event.clientY }
+            if (event.button === 0) { // 鼠标左键
+                // 开始长按检测
+                this.panStartTime = Date.now()
+                this.panStartPoint = { x: event.clientX, y: event.clientY }
+                this.panTimer = setTimeout(() => {
+                    // 长按500ms后开始平移
+                    this.isPanning = true
+                    this.lastPanPoint = { x: event.clientX, y: event.clientY }
+                }, 500)
                 event.preventDefault()
             }
         },
@@ -641,8 +684,25 @@ export default {
         /**
          * 结束平移
          */
-        endPan() {
+        endPan(event) {
+            // 清除长按定时器
+            if (this.panTimer) {
+                clearTimeout(this.panTimer)
+                this.panTimer = null
+            }
+            
+            // 如果没有进入平移状态且是短时间点击，则执行绘制
+            if (!this.isPanning && this.panStartTime) {
+                const clickDuration = Date.now() - this.panStartTime
+                if (clickDuration < 500 && event) {
+                    // 短时间点击，执行绘制操作
+                    this.drawPixel(event)
+                }
+            }
+            
             this.isPanning = false
+            this.panStartTime = null
+            this.panStartPoint = null
         },
 
         /**
@@ -885,6 +945,22 @@ export default {
             await this.setLoadingState(true)
 
             try {
+                // 将所有缓存像素转换为正式像素
+                let hasChanges = false
+                this.pixelData.forEach((pixelInfo, key) => {
+                    if (pixelInfo.status === 'cached') {
+                        pixelInfo.status = 'saved'
+                        hasChanges = true
+                    }
+                })
+
+                // 如果有状态变化，重新绘制画布以移除透明度
+                if (hasChanges) {
+                    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
+                    this.drawBackground()
+                    this.drawAllPixels()
+                }
+
                 // 将Map转换为普通对象
                 const pixelDataObj = Object.fromEntries(this.pixelData)
 
@@ -902,7 +978,7 @@ export default {
 
                 this.lastSaved = new Date()
 
-                console.log('数据保存成功')
+                console.log('数据保存成功，缓存像素已转换为正式像素')
             } catch (error) {
                 console.error('保存失败:', error)
                 this.showError(
@@ -930,7 +1006,15 @@ export default {
 
                 if (globalPixels) {
                     const pixelDataObj = globalPixels.get('pixelData') || {}
-                    this.pixelData = new Map(Object.entries(pixelDataObj))
+                    this.pixelData = new Map()
+                    
+                    // 为加载的数据添加状态字段
+                    Object.entries(pixelDataObj).forEach(([key, pixelInfo]) => {
+                        this.pixelData.set(key, {
+                            ...pixelInfo,
+                            status: pixelInfo.status || 'saved' // 确保有状态字段，默认为已保存
+                        })
+                    })
                 }
 
                 // 重新绘制画布
@@ -1221,27 +1305,40 @@ export default {
                 // 橡皮擦模式：只能擦除自己的像素
                 if (existingPixel && existingPixel.userId === this.currentUserId) {
                     this.pixelData.delete(key)
-                    this.drawCanvas()
-                    this.scheduleAutoSave()
+                    // 重绘被删除的区域
+                    this.ctx.clearRect(x, y, this.pixelSize, this.pixelSize)
+                    this.drawBackground()
+                    this.drawAllPixels()
                     this.removeFromLocalCache(key)
+                    
+                    // 自动保存到云端
+                    this.debounceAutoSave()
                 } else if (existingPixel) {
                     // 尝试擦除他人像素时显示提示
-                    alert(this.$t('cannotEraseOthersPixels'))
+                    this.showError(
+                        this.$t('errorOccurred'),
+                        this.$t('cannotEraseOthersPixels'),
+                        null
+                    )
+                    return
                 }
             } else {
                 // 绘制模式
                 const pixelInfo = {
                     color: this.selectedColor,
                     userId: this.currentUserId,
-                    timestamp: new Date()
+                    timestamp: new Date(),
+                    status: 'cached' // 新绘制的像素标记为缓存状态
                 }
                 
                 this.pixelData.set(key, pixelInfo)
-                this.drawSinglePixel(x, y, this.selectedColor)
-                this.scheduleAutoSave()
+                this.drawSinglePixel(x, y, this.selectedColor, 'cached')
                 
                 // 添加到本地缓存
                 this.addToLocalCache(key, pixelInfo)
+                
+                // 自动保存到云端
+                this.debounceAutoSave()
             }
         },
 
@@ -1328,8 +1425,8 @@ export default {
          * 获取云端数据（用于缓存验证）
          */
         async fetchCloudData() {
-            const PixelData = AV.Object.extend('PixelData')
-            const query = new AV.Query(PixelData)
+            const GlobalPixels = AV.Object.extend('GlobalPixels')
+            const query = new AV.Query(GlobalPixels)
             query.limit(1000)
             
             const results = await query.find()
@@ -1340,7 +1437,8 @@ export default {
                 cloudData.set(key, {
                     color: result.get('color'),
                     userId: result.get('userId'),
-                    timestamp: result.get('timestamp')
+                    timestamp: result.get('timestamp'),
+                    status: 'saved' // 云端数据标记为已保存状态
                 })
             })
             
