@@ -145,10 +145,22 @@
         </div>
         
         <!-- 悬挂式状态指示器 -->
-        <div class="floating-status-indicator" v-if="isLoading || saveCountdown > 0">
+        <div class="floating-status-indicator" v-if="isLoading">
           <span v-if="isLoading">{{ $t('loading') }}</span>
-          <span v-else-if="saveCountdown > 0">{{ $t('autoSaveIn') }}: {{ saveCountdown }}{{ $t('seconds') }}</span>
         </div>
+
+    <!-- 退出确认弹窗 -->
+    <div v-if="showExitPrompt" class="modal-overlay" @click="cancelExit">
+        <div class="modal-content exit-prompt" @click.stop>
+            <h3>{{ $t('unsavedChanges') }}</h3>
+                <p>{{ $t('unsavedChangesMessage') }}</p>
+                <div class="modal-actions">
+                    <button class="btn btn-primary" @click="saveAndExit">{{ $t('saveAndExit') }}</button>
+                    <button class="btn btn-secondary" @click="confirmExit">{{ $t('exitWithoutSaving') }}</button>
+                    <button class="btn btn-cancel" @click="cancelExit">{{ $t('cancel') }}</button>
+            </div>
+        </div>
+    </div>
 
     <!-- 关于模态框 -->
     <AboutModal :visible="showAboutModal" @close="showAboutModal = false" />
@@ -201,6 +213,7 @@ export default {
 
             // 像素数据
             pixelData: new Map(), // 存储所有像素数据 {key: {color, userId, timestamp, status: 'saved'|'cached'}}
+            userAddedPixels: new Map(), // 存储用户在当前会话中新添加的像素
 
             // 预览
             previewPixel: {
@@ -226,10 +239,7 @@ export default {
             loadingStartTime: null,
             minLoadingDuration: 2000, // 最小加载时间2秒
             
-            // 自动保存倒计时
-            saveCountdown: 0,
-            countdownTimer: null,
-            autoSaveTimer: null,
+
 
             // 全屏加载状态
             globalLoading: {
@@ -263,9 +273,11 @@ export default {
                 isPanningTouch: false
             },
 
-            // 本地缓存
-            localCache: new Map(), // 存储本地操作的像素
-            cacheCheckInterval: null // 缓存检查定时器
+            // 退出提示
+            showExitPrompt: false,
+            hasUnsavedChanges: false
+
+
         }
     },
 
@@ -282,21 +294,15 @@ export default {
         this.globalLoading.text = this.$t('initializingApp')
         // 开始初始化流程
         await this.initializeApp()
+        
+        // 添加页面关闭前的提示
+        window.addEventListener('beforeunload', this.handleBeforeUnload)
     },
 
     beforeUnmount() {
         window.removeEventListener('keydown', this.handleKeydown)
         this.$refs.canvasContainer?.removeEventListener('wheel', this.handleWheel)
-        
-        // 清理定时器
-        clearTimeout(this.autoSaveTimer)
-        clearInterval(this.countdownTimer)
-        
-        // 清理缓存检查定时器
-        if (this.cacheCheckInterval) {
-            clearInterval(this.cacheCheckInterval)
-            this.cacheCheckInterval = null
-        }
+        window.removeEventListener('beforeunload', this.handleBeforeUnload)
     },
 
     methods: {
@@ -340,7 +346,7 @@ export default {
                 }, remainingTime + 500)
 
             } catch (error) {
-                console.error('初始化失败:', error)
+                console.error(this.$t('initializationFailed') + ':', error)
                 this.globalLoading.show = false
                 this.showError(
                     this.$t('initializationFailed'),
@@ -371,6 +377,7 @@ export default {
                 
                 // 清空现有数据
                 this.pixelData.clear()
+                this.userAddedPixels.clear() // 清空用户新添加的像素记录
                 
                 // 加载云端数据到本地
                 results.forEach(result => {
@@ -385,7 +392,7 @@ export default {
                 
                 console.log(`已从GlobalPixels加载 ${results.length} 个像素数据`)
             } catch (error) {
-                console.error('加载像素数据失败:', error)
+                console.error(this.$t('loadPixelDataFailed') + ':', error)
                 // 即使加载失败也要继续，避免阻塞应用
             }
         },
@@ -562,12 +569,14 @@ export default {
                 if (existingPixel && existingPixel.userId === this.currentUserId) {
                     // 删除像素
                     this.pixelData.delete(key)
+                    // 如果是用户新添加的像素，也从userAddedPixels中移除
+                    this.userAddedPixels.delete(key)
                     // 重绘被删除的区域
                     this.ctx.clearRect(x, y, this.pixelSize, this.pixelSize)
                     this.drawBackground()
                     this.drawAllPixels()
-                    // 从本地缓存移除
-                    this.removeFromLocalCache(key)
+                    // 标记有未保存的更改
+                    this.hasUnsavedChanges = true
                 } else {
                     this.showError(
                         this.$t('errorOccurred'),
@@ -585,14 +594,13 @@ export default {
                     status: 'cached' // 新绘制的像素标记为缓存状态
                 }
                 this.pixelData.set(key, pixelInfo)
+                // 记录用户新添加的像素
+                this.userAddedPixels.set(key, pixelInfo)
                 // 绘制像素（缓存状态，带透明度）
                 this.drawSinglePixel(x, y, this.selectedColor, 'cached')
-                // 添加到本地缓存
-                this.addToLocalCache(key, pixelInfo)
+                // 标记有未保存的更改
+                this.hasUnsavedChanges = true
             }
-
-            // 自动保存到云端
-            this.debounceAutoSave()
         },
 
         /**
@@ -788,7 +796,7 @@ export default {
                         this.showLoginModal = true
                     }
                 } catch (error) {
-                    console.error('检查用户失败:', error)
+                    console.error(this.$t('checkUserFailed') + ':', error)
                     // 出错时显示登录弹窗
                     this.showLoginModal = true
                 }
@@ -861,7 +869,7 @@ export default {
                 const userExists = await this.validateUser(userId)
                 if (!userExists) {
                     // 如果用户不存在，自动创建用户记录
-                    console.log('用户不存在，自动创建用户记录:', userId)
+                    console.log(this.$t('userNotExistCreating') + ':', userId)
                     await this.createUserRecord(userId)
                 }
                 
@@ -875,7 +883,7 @@ export default {
                 // 重新加载新用户的数据
                 this.loadFromCloud()
             } catch (error) {
-                console.error('登录失败:', error)
+                console.error(this.$t('loginFailed') + ':', error)
                 this.showError(
                     this.$t('loginFailed'),
                     error.message || this.$t('loginFailed'),
@@ -914,7 +922,7 @@ export default {
                 // 重新加载新用户的数据
                 this.loadFromCloud()
             } catch (error) {
-                console.error('创建用户失败:', error)
+                console.error(this.$t('createUserFailed') + ':', error)
                 this.showError(
                     this.$t('createUserFailed'),
                     error.message || this.$t('createUserFailed'),
@@ -945,11 +953,23 @@ export default {
             await this.setLoadingState(true)
 
             try {
-                // 将所有缓存像素转换为正式像素
+                // 只保存用户新添加的像素
+                if (this.userAddedPixels.size === 0) {
+                    console.log(this.$t('noNewPixelsToSave'))
+                    this.hasUnsavedChanges = false
+                    return
+                }
+
+                // 将用户新添加的像素转换为正式像素
                 let hasChanges = false
-                this.pixelData.forEach((pixelInfo, key) => {
+                this.userAddedPixels.forEach((pixelInfo, key) => {
                     if (pixelInfo.status === 'cached') {
                         pixelInfo.status = 'saved'
+                        // 同时更新主像素数据中的状态
+                        const mainPixelInfo = this.pixelData.get(key)
+                        if (mainPixelInfo) {
+                            mainPixelInfo.status = 'saved'
+                        }
                         hasChanges = true
                     }
                 })
@@ -961,26 +981,36 @@ export default {
                     this.drawAllPixels()
                 }
 
-                // 将Map转换为普通对象
-                const pixelDataObj = Object.fromEntries(this.pixelData)
+                // 将用户新添加的像素转换为普通对象
+                const newPixelDataObj = Object.fromEntries(this.userAddedPixels)
 
-                // 保存全局像素数据
+                // 保存新像素到GlobalPixels云端
                 const GlobalPixels = AV.Object.extend('GlobalPixels')
-                let globalPixels = await new AV.Query(GlobalPixels).first()
+                
+                // 为每个新像素创建单独的记录
+                const savePromises = []
+                this.userAddedPixels.forEach((pixelInfo, key) => {
+                    const [x, y] = key.split(',').map(Number)
+                    const pixelRecord = new GlobalPixels()
+                    pixelRecord.set('x', x)
+                    pixelRecord.set('y', y)
+                    pixelRecord.set('color', pixelInfo.color)
+                    pixelRecord.set('userId', pixelInfo.userId)
+                    pixelRecord.set('timestamp', pixelInfo.timestamp)
+                    savePromises.push(pixelRecord.save())
+                })
 
-                if (!globalPixels) {
-                    globalPixels = new GlobalPixels()
-                }
-
-                globalPixels.set('pixelData', pixelDataObj)
-                globalPixels.set('lastUpdated', new Date())
-                await globalPixels.save()
+                await Promise.all(savePromises)
+                
+                // 清空用户新添加的像素记录
+                this.userAddedPixels.clear()
 
                 this.lastSaved = new Date()
+                this.hasUnsavedChanges = false // 清除未保存更改标记
 
-                console.log('数据保存成功，缓存像素已转换为正式像素')
+                console.log(`已保存 ${savePromises.length} 个新像素到GlobalPixels云端`)
             } catch (error) {
-                console.error('保存失败:', error)
+                console.error(this.$t('saveFailed') + ':', error)
                 this.showError(
                     this.$t('saveFailed'),
                     error.message || this.$t('saveFailed'),
@@ -1002,29 +1032,35 @@ export default {
             try {
                 // 加载全局像素数据
                 const GlobalPixels = AV.Object.extend('GlobalPixels')
-                const globalPixels = await new AV.Query(GlobalPixels).first()
+                const query = new AV.Query(GlobalPixels)
+                const results = await query.find()
 
-                if (globalPixels) {
-                    const pixelDataObj = globalPixels.get('pixelData') || {}
-                    this.pixelData = new Map()
+                // 清空现有数据
+                this.pixelData = new Map()
+                this.userAddedPixels = new Map() // 清空用户新添加的像素记录
+                
+                // 处理加载的像素数据
+                results.forEach(result => {
+                    const x = result.get('x')
+                    const y = result.get('y')
+                    const key = `${x},${y}`
                     
-                    // 为加载的数据添加状态字段
-                    Object.entries(pixelDataObj).forEach(([key, pixelInfo]) => {
-                        this.pixelData.set(key, {
-                            ...pixelInfo,
-                            status: pixelInfo.status || 'saved' // 确保有状态字段，默认为已保存
-                        })
+                    this.pixelData.set(key, {
+                        color: result.get('color'),
+                        userId: result.get('userId'),
+                        timestamp: result.get('timestamp'),
+                        status: 'saved' // 从云端加载的像素标记为已保存状态
                     })
-                }
+                })
 
                 // 重新绘制画布
                 this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
                 this.drawBackground()
                 this.drawAllPixels()
 
-                console.log('数据加载成功')
+                console.log(`已从GlobalPixels加载 ${results.length} 个像素数据`)
             } catch (error) {
-                console.error('加载失败:', error)
+                console.error(this.$t('loadFailed') + ':', error)
                 this.showError(
                     this.$t('loadFailed'),
                     error.message || this.$t('loadFailed'),
@@ -1035,32 +1071,7 @@ export default {
             }
         },
 
-        /**
-         * 防抖自动保存
-         */
-        debounceAutoSave() {
-            // 清除之前的定时器
-            clearTimeout(this.autoSaveTimer)
-            clearInterval(this.countdownTimer)
-            
-            // 重置倒计时
-            this.saveCountdown = 2
-            
-            // 启动倒计时显示
-            this.countdownTimer = setInterval(() => {
-                this.saveCountdown--
-                if (this.saveCountdown <= 0) {
-                    clearInterval(this.countdownTimer)
-                }
-            }, 1000)
-            
-            // 设置自动保存
-            this.autoSaveTimer = setTimeout(() => {
-                this.saveToCloud()
-                this.saveCountdown = 0
-                clearInterval(this.countdownTimer)
-            }, 2000) // 2秒后自动保存
-        },
+
 
         /**
          * 格式化时间
@@ -1081,7 +1092,7 @@ export default {
                 const user = await query.first()
                 return !!user
             } catch (error) {
-                console.error('验证用户失败:', error)
+                console.error(this.$t('validateUserFailed') + ':', error)
                 return false
             }
         },
@@ -1096,9 +1107,9 @@ export default {
                 user.set('userId', userId)
                 user.set('lastLoginAt', new Date())
                 await user.save()
-                console.log('用户记录创建成功:', userId)
+                console.log(this.$t('userRecordCreated') + ':', userId)
             } catch (error) {
-                console.error('创建用户记录失败:', error)
+                console.error(this.$t('createUserRecordFailed') + ':', error)
                 throw error
             }
         },
@@ -1117,7 +1128,7 @@ export default {
                     await user.save()
                 }
             } catch (error) {
-                console.error('更新用户登录时间失败:', error)
+                console.error(this.$t('updateUserLoginTimeFailed') + ':', error)
             }
         },
 
@@ -1149,6 +1160,58 @@ export default {
             if (this.errorState.retryAction) {
                 this.clearError()
                 this.errorState.retryAction()
+            }
+        },
+
+        /**
+         * 处理页面关闭前事件
+         */
+        handleBeforeUnload(event) {
+            if (this.hasUnsavedChanges) {
+                const message = this.$t('unsavedChangesWarning') || '您有未保存的更改，确定要离开吗？'
+                event.preventDefault()
+                event.returnValue = message
+                return message
+            }
+        },
+
+        /**
+         * 显示退出确认弹窗
+         */
+        showExitConfirmation() {
+            if (this.hasUnsavedChanges) {
+                this.showExitPrompt = true
+            }
+        },
+
+        /**
+         * 确认退出（不保存）
+         */
+        confirmExit() {
+            this.hasUnsavedChanges = false
+            this.showExitPrompt = false
+            // 这里可以添加实际的退出逻辑，比如跳转到其他页面
+        },
+
+        /**
+         * 取消退出
+         */
+        cancelExit() {
+            this.showExitPrompt = false
+        },
+
+        /**
+         * 保存并退出
+         */
+        async saveAndExit() {
+            try {
+                await this.saveToCloud()
+                this.hasUnsavedChanges = false
+                this.showExitPrompt = false
+                // 这里可以添加实际的退出逻辑
+            } catch (error) {
+                console.error('保存失败:', error)
+                // 保存失败时不退出
             }
         },
 
@@ -1305,14 +1368,14 @@ export default {
                 // 橡皮擦模式：只能擦除自己的像素
                 if (existingPixel && existingPixel.userId === this.currentUserId) {
                     this.pixelData.delete(key)
+                    // 如果是用户新添加的像素，也从userAddedPixels中移除
+                    this.userAddedPixels.delete(key)
                     // 重绘被删除的区域
                     this.ctx.clearRect(x, y, this.pixelSize, this.pixelSize)
                     this.drawBackground()
                     this.drawAllPixels()
-                    this.removeFromLocalCache(key)
-                    
-                    // 自动保存到云端
-                    this.debounceAutoSave()
+                    // 标记有未保存的更改
+                    this.hasUnsavedChanges = true
                 } else if (existingPixel) {
                     // 尝试擦除他人像素时显示提示
                     this.showError(
@@ -1332,118 +1395,15 @@ export default {
                 }
                 
                 this.pixelData.set(key, pixelInfo)
+                // 记录用户新添加的像素
+                this.userAddedPixels.set(key, pixelInfo)
                 this.drawSinglePixel(x, y, this.selectedColor, 'cached')
-                
-                // 添加到本地缓存
-                this.addToLocalCache(key, pixelInfo)
-                
-                // 自动保存到云端
-                this.debounceAutoSave()
+                // 标记有未保存的更改
+                this.hasUnsavedChanges = true
             }
         },
 
-        /**
-         * 添加像素到本地缓存
-         */
-        addToLocalCache(key, pixelInfo) {
-            this.localCache.set(key, {
-                ...pixelInfo,
-                localTimestamp: Date.now()
-            })
-            
-            // 启动缓存检查
-            this.startCacheValidation()
-        },
 
-        /**
-         * 从本地缓存移除像素
-         */
-        removeFromLocalCache(key) {
-            this.localCache.delete(key)
-            
-            // 如果缓存为空，停止检查
-            if (this.localCache.size === 0 && this.cacheCheckInterval) {
-                clearInterval(this.cacheCheckInterval)
-                this.cacheCheckInterval = null
-            }
-        },
-
-        /**
-         * 启动缓存验证
-         */
-        startCacheValidation() {
-            // 如果已经有检查定时器在运行，不重复启动
-            if (this.cacheCheckInterval) {
-                return
-            }
-            
-            // 每5秒检查一次缓存
-            this.cacheCheckInterval = setInterval(() => {
-                this.validateLocalCache()
-            }, 5000)
-        },
-
-        /**
-         * 验证本地缓存
-         */
-        async validateLocalCache() {
-            if (this.localCache.size === 0) {
-                if (this.cacheCheckInterval) {
-                    clearInterval(this.cacheCheckInterval)
-                    this.cacheCheckInterval = null
-                }
-                return
-            }
-            
-            try {
-                // 获取最新的云端数据
-                const cloudData = await this.fetchCloudData()
-                
-                // 检查本地缓存中的像素是否存在于云端
-                const keysToRemove = []
-                
-                for (const [key, localPixel] of this.localCache) {
-                    const cloudPixel = cloudData.get(key)
-                    
-                    // 如果云端存在相同的像素且用户ID匹配，则从缓存中移除
-                    if (cloudPixel && cloudPixel.userId === localPixel.userId) {
-                        keysToRemove.push(key)
-                    }
-                }
-                
-                // 移除已确认的像素
-                keysToRemove.forEach(key => {
-                    this.removeFromLocalCache(key)
-                })
-                
-            } catch (error) {
-                console.error('缓存验证失败:', error)
-            }
-        },
-
-        /**
-         * 获取云端数据（用于缓存验证）
-         */
-        async fetchCloudData() {
-            const GlobalPixels = AV.Object.extend('GlobalPixels')
-            const query = new AV.Query(GlobalPixels)
-            query.limit(1000)
-            
-            const results = await query.find()
-            const cloudData = new Map()
-            
-            results.forEach(result => {
-                const key = `${result.get('x')},${result.get('y')}`
-                cloudData.set(key, {
-                    color: result.get('color'),
-                    userId: result.get('userId'),
-                    timestamp: result.get('timestamp'),
-                    status: 'saved' // 云端数据标记为已保存状态
-                })
-            })
-            
-            return cloudData
-        }
     }
 }
 </script>
