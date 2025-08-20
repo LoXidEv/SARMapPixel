@@ -399,14 +399,14 @@ export default {
         },
 
         /**
-         * 加载像素数据（模拟异步操作）
+         * 加载像素数据并自动绘制到画布
          */
         async loadPixelData() {
             try {
-                // 从GlobalPixels表加载实际的像素数据
+                // 从GlobalPixels表加载所有像素数据
                 const GlobalPixels = AV.Object.extend('GlobalPixels')
                 const query = new AV.Query(GlobalPixels)
-                query.limit(1000)
+                // 移除limit限制，加载所有数据
                 
                 const results = await query.find()
                 
@@ -425,7 +425,14 @@ export default {
                     })
                 })
                 
-                console.log(`已从GlobalPixels加载 ${results.length} 个像素数据`)
+                // 自动绘制所有像素到画布
+                if (this.ctx && this.canvas) {
+                    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
+                    this.drawBackground()
+                    this.drawAllPixels()
+                }
+                
+                console.log(`已从GlobalPixels加载 ${results.length} 个像素数据并自动绘制到画布`)
             } catch (error) {
                 console.error(this.$t('loadPixelDataFailed') + ':', error)
                 // 即使加载失败也要继续，避免阻塞应用
@@ -1122,65 +1129,79 @@ export default {
                 // 保存新像素到GlobalPixels云端
                 const GlobalPixels = AV.Object.extend('GlobalPixels')
                 
-                // 为每个新像素创建或更新记录
-                const savePromises = []
+                // 批量查询现有像素
+                const coordinates = Array.from(this.userAddedPixels.keys()).map(key => {
+                    const [x, y] = key.split(',').map(Number)
+                    return { x, y, key }
+                })
+                
+                // 构建批量查询
+                const existingPixelsMap = new Map()
+                const batchQuery = new AV.Query('GlobalPixels')
+                
+                // 使用or查询批量获取现有像素
+                if (coordinates.length > 0) {
+                    const orQueries = coordinates.map(coord => {
+                        const query = new AV.Query('GlobalPixels')
+                        query.equalTo('x', coord.x)
+                        query.equalTo('y', coord.y)
+                        return query
+                    })
+                    
+                    const compoundQuery = AV.Query.or(...orQueries)
+                    const existingPixels = await compoundQuery.find()
+                    
+                    // 建立现有像素的映射
+                    existingPixels.forEach(pixel => {
+                        const key = `${pixel.get('x')},${pixel.get('y')}`
+                        existingPixelsMap.set(key, pixel)
+                    })
+                }
+                
+                // 准备批量保存的对象
+                const objectsToSave = []
                 let savedCount = 0
                 let skippedCount = 0
                 
                 for (const [key, pixelInfo] of this.userAddedPixels) {
                     const [x, y] = key.split(',').map(Number)
+                    const existingPixel = existingPixelsMap.get(key)
                     
-                    // 查询是否存在相同坐标的像素
-                    const query = new AV.Query('GlobalPixels')
-                    query.equalTo('x', x)
-                    query.equalTo('y', y)
-                    
-                    try {
-                        const existingPixel = await query.first()
-                        if (existingPixel) {
-                            // 获取现有像素的时间戳
-                            const existingTimestamp = existingPixel.get('timestamp')
-                            const newTimestamp = pixelInfo.timestamp
-                            
-                            // 只有当新像素的时间戳更新时才更新数据
-                            if (newTimestamp > existingTimestamp) {
-                                existingPixel.set('color', pixelInfo.color)
-                                existingPixel.set('userId', pixelInfo.userId)
-                                existingPixel.set('timestamp', pixelInfo.timestamp)
-                                savePromises.push(existingPixel.save())
-                                savedCount++
-                                console.log(`更新像素 (${x},${y}): 新时间戳 ${newTimestamp.toISOString()} > 旧时间戳 ${existingTimestamp.toISOString()}`)
-                            } else {
-                                skippedCount++
-                                console.log(`跳过像素 (${x},${y}): 新时间戳 ${newTimestamp.toISOString()} <= 旧时间戳 ${existingTimestamp.toISOString()}`)
-                            }
-                        } else {
-                            // 如果不存在，创建新记录
-                            const pixelRecord = new GlobalPixels()
-                            pixelRecord.set('x', x)
-                            pixelRecord.set('y', y)
-                            pixelRecord.set('color', pixelInfo.color)
-                            pixelRecord.set('userId', pixelInfo.userId)
-                            pixelRecord.set('timestamp', pixelInfo.timestamp)
-                            savePromises.push(pixelRecord.save())
+                    if (existingPixel) {
+                        // 获取现有像素的时间戳
+                        const existingTimestamp = existingPixel.get('timestamp')
+                        const newTimestamp = pixelInfo.timestamp
+                        
+                        // 只有当新像素的时间戳更新时才更新数据
+                        if (newTimestamp > existingTimestamp) {
+                            existingPixel.set('color', pixelInfo.color)
+                            existingPixel.set('userId', pixelInfo.userId)
+                            existingPixel.set('timestamp', pixelInfo.timestamp)
+                            objectsToSave.push(existingPixel)
                             savedCount++
-                            console.log(`创建新像素 (${x},${y})`)
+                            console.log(`更新像素 (${x},${y}): 新时间戳 ${newTimestamp.toISOString()} > 旧时间戳 ${existingTimestamp.toISOString()}`)
+                        } else {
+                            skippedCount++
+                            console.log(`跳过像素 (${x},${y}): 新时间戳 ${newTimestamp.toISOString()} <= 旧时间戳 ${existingTimestamp.toISOString()}`)
                         }
-                    } catch (error) {
-                        console.error('查询像素时出错:', error)
-                        // 如果查询失败，创建新记录
+                    } else {
+                        // 如果不存在，创建新记录
                         const pixelRecord = new GlobalPixels()
                         pixelRecord.set('x', x)
                         pixelRecord.set('y', y)
                         pixelRecord.set('color', pixelInfo.color)
                         pixelRecord.set('userId', pixelInfo.userId)
                         pixelRecord.set('timestamp', pixelInfo.timestamp)
-                        savePromises.push(pixelRecord.save())
+                        objectsToSave.push(pixelRecord)
                         savedCount++
+                        console.log(`创建新像素 (${x},${y})`)
                     }
                 }
 
-                await Promise.all(savePromises)
+                // 使用批量保存
+                if (objectsToSave.length > 0) {
+                    await AV.Object.saveAll(objectsToSave)
+                }
                 
                 // 清空用户新添加的像素记录
                 this.userAddedPixels.clear()
