@@ -57,7 +57,7 @@
         <button class="tool-btn" @click="loadFromCloud" :disabled="isLoading || !currentUserId">
           {{ $t('load') }}
         </button>
-        <button class="tool-btn" @click="selectBrush" :class="{ active: !isErasing }" :disabled="!currentUserId">
+        <button class="tool-btn" @click="selectBrush" :class="{ active: !isErasing && !isColorPicking }" :disabled="!currentUserId">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
             <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
           </svg>
@@ -68,6 +68,12 @@
             <path d="M16.24 3.56l4.95 4.94c.78.79.78 2.05 0 2.84L12 20.53a4.008 4.008 0 0 1-5.66 0L2.81 17c-.78-.79-.78-2.05 0-2.84l8.49-8.49c.79-.78 2.05-.78 2.84 0l2.1 2.1zm-2.12 10.61l-1.41-1.41L7.76 17.7a1 1 0 0 0 0 1.41l1.41 1.41a1 1 0 0 0 1.41 0l4.95-4.95z"/>
           </svg>
           {{ $t('eraser') }}
+        </button>
+        <button class="tool-btn" @click="selectColorPicker" :class="{ active: isColorPicking }" :disabled="!currentUserId">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M20.71 5.63l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-3.12 3.12-1.93-1.91-1.41 1.41 1.42 1.42L3 16.25V21h4.75l8.92-8.92 1.42 1.42 1.41-1.41-1.91-1.93 3.12-3.12c.39-.39.39-1.02 0-1.41zM6.92 19H5v-1.92l8.06-8.06 1.92 1.92L6.92 19z"/>
+          </svg>
+          {{ $t('colorPicker') }}
         </button>
         <input type="color" v-model="customColor" @change="selectColor(customColor)" class="color-picker" :title="$t('customColor')" :disabled="!currentUserId">
             </div>
@@ -105,12 +111,12 @@
             <div class="canvas-wrapper" :style="{ transform: `scale(${zoomLevel}) translate(${panX}px, ${panY}px)` }"
                 @mousedown="startPan" @mousemove="handlePan" @mouseup="endPan" @mouseleave="endPan"
                 @touchstart="handleTouchStart" @touchmove="handleTouchMove" @touchend="handleTouchEnd">
-                <canvas ref="canvas" @mousemove="handleMouseMove" @mouseleave="hidePreview"
+                <canvas ref="canvas" @click="drawPixel" @mousemove="handleMouseMove" @mouseleave="hidePreview"
                     @touchstart="handleCanvasTouchStart" @touchmove="handleCanvasTouchMove" @touchend="handleCanvasTouchEnd"
-                    :style="{ cursor: isPanning ? 'grabbing' : 'crosshair' }"></canvas>
+                    :style="{ cursor: isPanning ? 'grabbing' : (isColorPicking ? 'copy' : 'crosshair') }"></canvas>
 
                 <!-- 像素预览 -->
-                <div v-if="previewPixel.show" class="pixel-preview" :style="{
+                <div v-if="previewPixel.show && !isColorPicking" class="pixel-preview" :style="{
                     left: previewPixel.x + 'px',
                     top: previewPixel.y + 'px',
                     backgroundColor: selectedColor
@@ -162,6 +168,27 @@
         </div>
     </div>
 
+    <!-- 取色器颜色预览 -->
+    <div v-if="showColorPreview" class="color-preview" 
+         :style="{ 
+           left: magnifierPosition.x + 20 + 'px', 
+           top: magnifierPosition.y - 60 + 'px' 
+         }">
+        <div class="color-preview-swatch" :style="{ backgroundColor: colorPreview }"></div>
+        <div class="color-preview-text">{{ colorPreview }}</div>
+    </div>
+
+    <!-- 取色器放大镜 -->
+    <div v-if="showMagnifier" class="magnifier" 
+         :style="{ 
+           left: magnifierPosition.x - 50 + 'px', 
+           top: magnifierPosition.y - 50 + 'px' 
+         }">
+        <div class="magnifier-circle">
+            <div class="magnifier-crosshair"></div>
+        </div>
+    </div>
+
     <!-- 关于模态框 -->
     <AboutModal :visible="showAboutModal" @close="showAboutModal = false" />
     </div>
@@ -200,6 +227,13 @@ export default {
             isColorPickerVisible: false, // 颜色选择器显示状态
             customColor: '#FF0000', // 自定义颜色
             isErasing: false, // 是否处于橡皮擦模式
+            isColorPicking: false, // 是否处于取色器模式
+            
+            // 取色器预览和放大镜
+            colorPreview: '#000000', // 预览颜色
+            showColorPreview: false, // 是否显示颜色预览
+            magnifierPosition: { x: 0, y: 0 }, // 放大镜位置
+            showMagnifier: false, // 是否显示放大镜
 
             // 缩放和平移
             zoomLevel: 1,
@@ -525,6 +559,7 @@ export default {
                 this.isErasing = false
                 this.selectedColor = this.previousColor
             }
+            this.isColorPicking = false
         },
 
         /**
@@ -533,7 +568,41 @@ export default {
         selectEraser() {
             if (!this.isErasing) {
                 this.isErasing = true
+                this.isColorPicking = false
                 this.previousColor = this.selectedColor
+            }
+        },
+
+        /**
+         * 选择取色器模式
+         */
+        async selectColorPicker() {
+            // 检查是否支持EyeDropper API
+            if ('EyeDropper' in window) {
+                try {
+                    const eyeDropper = new EyeDropper()
+                    const result = await eyeDropper.open()
+                    // 使用EyeDropper API获取的颜色
+                    this.selectColor(result.sRGBHex)
+                    // 不需要进入取色器模式，直接使用API结果
+                    this.isColorPicking = false
+                    this.isErasing = false
+                    this.hidePreview()
+                    return
+                } catch (error) {
+                    // 用户取消或其他错误，回退到画布取色模式
+                    console.log('EyeDropper cancelled or failed:', error)
+                }
+            }
+            
+            // 回退到原有的画布取色模式
+            const wasColorPicking = this.isColorPicking
+            this.isColorPicking = !this.isColorPicking
+            this.isErasing = false
+            
+            // 如果退出取色器模式，隐藏预览效果
+            if (wasColorPicking) {
+                this.hidePreview()
             }
         },
 
@@ -563,7 +632,25 @@ export default {
 
             const key = `${x},${y}`
 
-            if (this.isErasing) {
+            if (this.isColorPicking) {
+                // 取色器模式：从画布上提取颜色
+                const existingPixel = this.pixelData.get(key)
+                if (existingPixel) {
+                    // 如果该位置有像素，提取其颜色
+                    this.selectColor(existingPixel.color)
+                    // 退出取色器模式
+                    this.isColorPicking = false
+                } else {
+                    // 如果该位置没有像素，从背景图像中提取颜色
+                    const imageData = this.ctx.getImageData(x, y, 1, 1)
+                    const data = imageData.data
+                    const color = `#${((1 << 24) + (data[0] << 16) + (data[1] << 8) + data[2]).toString(16).slice(1)}`
+                    this.selectColor(color)
+                    // 退出取色器模式
+                    this.isColorPicking = false
+                }
+                return
+            } else if (this.isErasing) {
                 // 检查是否是自己的像素
                 const existingPixel = this.pixelData.get(key)
                 if (existingPixel && existingPixel.userId === this.currentUserId) {
@@ -617,7 +704,35 @@ export default {
             const y = Math.floor((event.clientY - rect.top) * scaleY / this.pixelSize) * this.pixelSize
 
             if (x >= 0 && y >= 0 && x < this.canvas.width && y < this.canvas.height) {
-                // 显示预览
+                // 取色器模式下的特殊处理
+                if (this.isColorPicking) {
+                    // 更新放大镜位置
+                    this.magnifierPosition = {
+                        x: event.clientX,
+                        y: event.clientY
+                    }
+                    this.showMagnifier = true
+                    
+                    // 获取当前位置的颜色进行预览
+                    const key = `${x},${y}`
+                    const existingPixel = this.pixelData.get(key)
+                    if (existingPixel) {
+                        this.colorPreview = existingPixel.color
+                    } else {
+                        // 从背景图像中获取颜色
+                        const imageData = this.ctx.getImageData(x, y, 1, 1)
+                        const data = imageData.data
+                        this.colorPreview = `#${((1 << 24) + (data[0] << 16) + (data[1] << 8) + data[2]).toString(16).slice(1)}`
+                    }
+                    this.showColorPreview = true
+                    
+                    // 在取色器模式下不显示普通预览
+                    this.previewPixel.show = false
+                    this.pixelTooltip.show = false
+                    return
+                }
+                
+                // 普通模式下的预览
                 this.previewPixel = {
                     show: true,
                     x: x / scaleX + rect.left,
@@ -645,6 +760,8 @@ export default {
             } else {
                 this.previewPixel.show = false
                 this.pixelTooltip.show = false
+                this.showColorPreview = false
+                this.showMagnifier = false
             }
         },
 
@@ -654,6 +771,8 @@ export default {
         hidePreview() {
             this.previewPixel.show = false
             this.pixelTooltip.show = false
+            this.showColorPreview = false
+            this.showMagnifier = false
         },
 
         /**
@@ -1764,6 +1883,91 @@ canvas {
 
 .tooltip-position {
     font-family: monospace;
+}
+
+/* 取色器颜色预览样式 */
+.color-preview {
+    position: fixed;
+    background: white;
+    border: 2px solid #333;
+    border-radius: 8px;
+    padding: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 1002;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-family: monospace;
+    min-width: 120px;
+}
+
+.color-preview-swatch {
+    width: 24px;
+    height: 24px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.color-preview-text {
+    font-weight: bold;
+    color: #333;
+}
+
+/* 取色器放大镜样式 */
+.magnifier {
+    position: fixed;
+    width: 100px;
+    height: 100px;
+    pointer-events: none;
+    z-index: 1001;
+}
+
+.magnifier-circle {
+    width: 100%;
+    height: 100%;
+    border: 3px solid #333;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.magnifier-crosshair {
+    width: 20px;
+    height: 20px;
+    position: relative;
+}
+
+.magnifier-crosshair::before,
+.magnifier-crosshair::after {
+    content: '';
+    position: absolute;
+    background: #333;
+}
+
+.magnifier-crosshair::before {
+    width: 2px;
+    height: 20px;
+    left: 50%;
+    top: 0;
+    transform: translateX(-50%);
+}
+
+.magnifier-crosshair::after {
+    width: 20px;
+    height: 2px;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.tooltip-position {
     color: #ccc;
     font-size: 11px;
 }
