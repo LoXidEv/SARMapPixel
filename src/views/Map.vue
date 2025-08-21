@@ -115,12 +115,15 @@
 
 
     <!-- 画布容器 -->
-    <div class="canvas-container" ref="canvasContainer">
+    <div class="canvas-container" ref="canvasContainer" 
+         @contextmenu.prevent @selectstart.prevent @dragstart.prevent>
       <div class="canvas-wrapper" :style="{ transform: `scale(${zoomLevel}) translate(${panX}px, ${panY}px)` }"
         @mousedown="startPan" @mousemove="handlePan" @mouseup="endPan" @mouseleave="endPan"
-        @touchstart="handleTouchStart" @touchmove="handleTouchMove" @touchend="handleTouchEnd">
+        @touchstart="handleTouchStart" @touchmove="handleTouchMove" @touchend="handleTouchEnd"
+        @contextmenu.prevent @selectstart.prevent @dragstart.prevent>
         <canvas ref="canvas" @click="drawPixel" @mousemove="handleMouseMove" @mouseleave="hidePreview"
           @touchstart="handleCanvasTouchStart" @touchmove="handleCanvasTouchMove" @touchend="handleCanvasTouchEnd"
+          @contextmenu.prevent @selectstart.prevent @dragstart.prevent
           :style="{ cursor: isPanning ? 'grabbing' : (isColorPicking ? 'copy' : 'crosshair') }"></canvas>
       </div>
 
@@ -2423,6 +2426,7 @@ export default {
 .tools {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .zoom-controls {
@@ -2490,12 +2494,32 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* 禁用用户选择和拖拽 */
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  -webkit-user-drag: none;
+  -khtml-user-drag: none;
+  -moz-user-drag: none;
+  -o-user-drag: none;
+  user-drag: none;
 }
 
 .canvas-wrapper {
   position: relative;
   transform-origin: center;
   transition: transform 0.1s ease-out;
+  /* 禁用用户选择和拖拽 */
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  -webkit-user-drag: none;
+  -khtml-user-drag: none;
+  -moz-user-drag: none;
+  -o-user-drag: none;
+  user-drag: none;
 }
 
 canvas {
@@ -2503,6 +2527,20 @@ canvas {
   border-radius: var(--border-radius);
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
   background-color: white;
+  /* 禁用用户选择和拖拽 */
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  -webkit-user-drag: none;
+  -khtml-user-drag: none;
+  -moz-user-drag: none;
+  -o-user-drag: none;
+  user-drag: none;
+  /* 禁用图像平滑 */
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
 }
 
 /* 像素预览样式 */
