@@ -184,6 +184,40 @@ export default {
   color: white;
 }
 
+/* 通用section样式 - 用于AboutModal和HelpModal */
+.modal-section {
+  margin-bottom: 25px;
+}
+
+.modal-section:last-child {
+  margin-bottom: 0;
+}
+
+.modal-section h3 {
+  color: var(--theme-color);
+  margin: 0 0 15px 0;
+  font-size: 18px;
+  font-weight: bold;
+  border-bottom: 2px solid var(--theme-color);
+  padding-bottom: 5px;
+}
+
+.modal-text {
+  margin: 0;
+  padding: 0;
+  line-height: 1.6;
+  color: #666;
+}
+
+.modal-text a {
+  color: var(--theme-color);
+  text-decoration: none;
+}
+
+.modal-text a:hover {
+  text-decoration: underline;
+}
+
 /* 响应式设计 */
 @media (max-width: 768px) {
   .modal {
@@ -195,6 +229,14 @@ export default {
   .modal-content,
   .modal-footer {
     padding: 15px 20px;
+  }
+  
+  .modal-section h3 {
+    font-size: 16px;
+  }
+  
+  .modal-text {
+    font-size: 14px;
   }
 }
 </style>

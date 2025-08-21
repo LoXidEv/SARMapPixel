@@ -13,16 +13,12 @@
 }
 
 @font-face {
-  font-family: 'Poppins Regular';
-  /* font-style: normal;
-  font-weight: 400; */
+  font-family: 'Poppins SemiBold';
   src: url('/font/Poppins-SemiBold.ttf');
 }
 
 @font-face {
   font-family: 'Poppins Regular';
-  /* font-style: normal;
-  font-weight: 400; */
   src: url('/font/Poppins-Regular.ttf');
 }
 
