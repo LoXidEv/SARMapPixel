@@ -356,10 +356,7 @@ export default {
       hasUnsavedChanges: false,
 
       // 自动保存草稿相关
-      autoSaveTimer: null,
-      autoSaveDelay: 3000, // 3秒无操作后自动保存
       isAutoSaving: false,
-      lastActivityTime: null,
 
       // 手动保存状态
       isManualSaving: false,
@@ -399,10 +396,7 @@ export default {
     this.$refs.canvasContainer?.removeEventListener('wheel', this.handleWheel)
     window.removeEventListener('beforeunload', this.handleBeforeUnload)
 
-    // 清理自动保存定时器
-    if (this.autoSaveTimer) {
-      clearTimeout(this.autoSaveTimer)
-    }
+
 
     // 清理自动加载定时器
     if (this.autoLoadTimer) {
@@ -1543,6 +1537,8 @@ export default {
           this.drawAllPixels()
           // 根据是否还有未保存的像素来设置状态
           this.hasUnsavedChanges = this.userAddedPixels.size > 0
+          // 立即缓存到本地
+          this.autoSaveDraft()
         }
         // 在橡皮擦模式下，无论是否成功擦除，都直接返回，不执行后续的绘制逻辑
         return
@@ -1582,8 +1578,8 @@ export default {
         this.drawSinglePixel(x, y, this.selectedColor, 'cached')
         // 标记有未保存的更改
         this.hasUnsavedChanges = true
-        // 重置自动保存定时器
-        this.resetAutoSaveTimer()
+        // 立即缓存到本地
+        this.autoSaveDraft()
       }
     },
 
@@ -2522,7 +2518,8 @@ export default {
     },
 
     /**
-     * 自动保存草稿到本地存储（按区块分别保存）
+     * 立即保存草稿到本地存储（按区块分别保存）
+     * 当有像素数据变化时立即缓存到本地
      */
     autoSaveDraft() {
       if (!this.currentUserId || this.userAddedPixels.size === 0) {
@@ -2605,23 +2602,7 @@ export default {
       console.log('所有区块草稿已清除')
     },
 
-    /**
-     * 重置自动保存定时器
-     */
-    resetAutoSaveTimer() {
-      // 清除现有定时器
-      if (this.autoSaveTimer) {
-        clearTimeout(this.autoSaveTimer)
-      }
 
-      // 更新最后活动时间
-      this.lastActivityTime = Date.now()
-
-      // 设置新的定时器
-      this.autoSaveTimer = setTimeout(() => {
-        this.autoSaveDraft()
-      }, this.autoSaveDelay)
-    },
 
     /**
      * 启动自动加载定时器
@@ -2847,8 +2828,8 @@ export default {
         this.drawSinglePixel(x, y, this.selectedColor, 'cached')
         // 标记有未保存的更改
         this.hasUnsavedChanges = true
-        // 重置自动保存定时器
-        this.resetAutoSaveTimer()
+        // 立即缓存到本地
+        this.autoSaveDraft()
       }
     }
 
