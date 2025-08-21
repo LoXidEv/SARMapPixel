@@ -463,7 +463,7 @@ export default {
     },
 
     /**
-     * 从本地缓存获取区块数据
+     * 从本地缓存获取区块数据（支持云端格式）
      * @param {string} chunkKey - 区块键值
      * @returns {Map|null} - 缓存的区块数据或null
      */
@@ -479,28 +479,39 @@ export default {
         const cache = JSON.parse(cachedData)
         const now = Date.now()
 
-        // 检查缓存是否过期
-        if (now - cache.timestamp > this.cacheExpireTime) {
+        // 检查缓存是否过期（兼容新旧格式的时间戳字段）
+        const cacheTimestamp = cache.cacheTimestamp || cache.timestamp
+        if (now - cacheTimestamp > this.cacheExpireTime) {
           console.log(`区块 ${chunkKey} 缓存已过期，删除缓存`)
           localStorage.removeItem(cacheKey)
           return null
         }
 
-        // 将缓存数据转换为Map格式
+        // 将缓存数据转换为Map格式（统一处理云端格式）
         const chunkData = new Map()
         cache.data.forEach(pixel => {
           const pixelKey = `${pixel.x},${pixel.y}`
-          chunkData.set(pixelKey, {
+          
+          // 统一使用云端格式的数据结构
+          const pixelData = {
             x: pixel.x,
             y: pixel.y,
             color: pixel.color,
             userId: pixel.userId,
-            timestamp: new Date(pixel.timestamp),
-            status: 'saved'
-          })
+            // 优先使用createdAt，兼容旧的timestamp字段
+            timestamp: pixel.createdAt ? new Date(pixel.createdAt) : new Date(pixel.timestamp),
+            status: 'saved',
+            // 保留云端格式的额外字段
+            objectId: pixel.objectId,
+            createdAt: pixel.createdAt ? new Date(pixel.createdAt) : new Date(pixel.timestamp),
+            updatedAt: pixel.updatedAt ? new Date(pixel.updatedAt) : new Date(pixel.timestamp)
+          }
+          
+          chunkData.set(pixelKey, pixelData)
         })
 
-        console.log(`区块 ${chunkKey} 从缓存加载了 ${chunkData.size} 个像素`)
+        const formatInfo = cache.dataFormat ? `（${cache.dataFormat}格式）` : ''
+        console.log(`区块 ${chunkKey} 从缓存加载了 ${chunkData.size} 个像素${formatInfo}`)
         return chunkData
       } catch (error) {
         console.error(`获取区块 ${chunkKey} 缓存失败:`, error)
@@ -509,39 +520,141 @@ export default {
     },
 
     /**
-     * 将区块数据保存到本地缓存
+     * 将区块数据保存到本地缓存（参照云端格式）
      * @param {string} chunkKey - 区块键值
      * @param {Map} chunkData - 区块数据
+     * @param {number} chunkX - 区块X坐标（可选）
+     * @param {number} chunkY - 区块Y坐标（可选）
      */
-    saveChunkToCache(chunkKey, chunkData) {
+    saveChunkToCache(chunkKey, chunkData, chunkX = null, chunkY = null) {
       try {
         if (!chunkData || chunkData.size === 0) {
           return
         }
 
-        // 将Map数据转换为可序列化的数组
+        // 如果没有提供区块坐标，尝试从chunkKey解析
+        if (chunkX === null || chunkY === null) {
+          const coords = this.parseChunkKey(chunkKey)
+          chunkX = coords.chunkX
+          chunkY = coords.chunkY
+        }
+
+        // 将Map数据转换为云端格式的数组（完全模仿LeanCloud数据结构）
         const pixelArray = []
         chunkData.forEach((pixel, pixelKey) => {
-          pixelArray.push({
+          // 完全参照云端数据格式，包含所有LeanCloud标准字段
+          const cloudFormatPixel = {
+            objectId: `cache_${pixelKey}_${Date.now()}`, // 模拟LeanCloud的objectId
             x: pixel.x,
             y: pixel.y,
             color: pixel.color,
             userId: pixel.userId,
-            timestamp: pixel.timestamp.toISOString()
-          })
+            createdAt: pixel.timestamp instanceof Date ? pixel.timestamp : new Date(pixel.timestamp),
+            updatedAt: pixel.timestamp instanceof Date ? pixel.timestamp : new Date(pixel.timestamp),
+            // 保留原有timestamp字段以兼容现有代码
+            timestamp: pixel.timestamp instanceof Date ? pixel.timestamp : new Date(pixel.timestamp)
+          }
+          pixelArray.push(cloudFormatPixel)
         })
 
         const cacheData = {
+          chunkKey,
+          chunkX,
+          chunkY,
+          tableName: this.getChunkTableName(chunkX, chunkY), // 添加表名信息
           data: pixelArray,
-          timestamp: Date.now()
+          cacheTimestamp: Date.now(), // 缓存时间戳
+          dataFormat: 'cloud_compatible', // 标记数据格式为云端兼容
+          version: '2.0' // 版本标识
         }
 
         const cacheKey = `chunk_cache_${chunkKey}`
         localStorage.setItem(cacheKey, JSON.stringify(cacheData))
 
-        console.log(`区块 ${chunkKey} 已保存到缓存，包含 ${pixelArray.length} 个像素`)
+        console.log(`区块 ${chunkKey} (${chunkX},${chunkY}) 已保存到缓存（云端格式），包含 ${pixelArray.length} 个像素`)
       } catch (error) {
         console.error(`保存区块 ${chunkKey} 到缓存失败:`, error)
+      }
+    },
+
+    /**
+     * 从区块键值解析区块坐标
+     * @param {string} chunkKey - 区块键值
+     * @returns {object} - 包含chunkX和chunkY的对象
+     */
+    parseChunkKey(chunkKey) {
+      const parts = chunkKey.split('_')
+      if (parts.length >= 2) {
+        const chunkX = parseInt(parts[0])
+        const chunkY = parseInt(parts[1])
+        return { chunkX, chunkY }
+      }
+      return { chunkX: 0, chunkY: 0 }
+    },
+
+    /**
+     * 清除指定区块的缓存
+     * @param {string} chunkKey - 区块键值
+     */
+    clearChunkCache(chunkKey) {
+      try {
+        const cacheKey = `chunk_cache_${chunkKey}`
+        localStorage.removeItem(cacheKey)
+        console.log(`区块 ${chunkKey} 的缓存已清除`)
+      } catch (error) {
+        console.error(`清除区块 ${chunkKey} 缓存失败:`, error)
+      }
+    },
+
+    /**
+     * 刷新指定区块的缓存（重新从云端加载并缓存）
+     * @param {string} chunkKey - 区块键值
+     * @param {number} chunkX - 区块X坐标
+     * @param {number} chunkY - 区块Y坐标
+     */
+    async refreshChunkCache(chunkKey, chunkX, chunkY) {
+      try {
+        // 清除旧缓存
+        this.clearChunkCache(chunkKey)
+        
+        // 重新从云端加载区块数据
+        const tableName = this.getChunkTableName(chunkX, chunkY)
+        const ChunkTable = AV.Object.extend(tableName)
+        const query = new AV.Query(ChunkTable)
+        
+        const results = await query.find()
+        const chunkData = new Map()
+        
+        results.forEach(result => {
+          const x = result.get('x')
+          const y = result.get('y')
+          const key = `${x},${y}`
+          
+          // 使用完整的云端格式数据结构
+          const pixelData = {
+            x,
+            y,
+            color: result.get('color'),
+            userId: result.get('userId'),
+            timestamp: result.get('createdAt'),
+            status: 'saved',
+            // 保留完整的云端字段
+            objectId: result.id,
+            createdAt: result.get('createdAt'),
+            updatedAt: result.get('updatedAt')
+          }
+          
+          chunkData.set(key, pixelData)
+        })
+        
+        // 保存新的缓存数据
+        this.saveChunkToCache(chunkKey, chunkData, chunkX, chunkY)
+        
+        console.log(`区块 ${chunkKey} 缓存已刷新，包含 ${chunkData.size} 个像素`)
+        return chunkData
+      } catch (error) {
+        console.error(`刷新区块 ${chunkKey} 缓存失败:`, error)
+        return null
       }
     },
 
@@ -707,7 +820,7 @@ export default {
             console.log(`区块 ${name} 云端数据加载成功`)
 
             // 保存到缓存
-            this.saveChunkToCache(chunkKey, this.chunkData.get(chunkKey))
+            this.saveChunkToCache(chunkKey, this.chunkData.get(chunkKey), chunkX, chunkY)
           }
 
           // 加载该区块的本地草稿数据
@@ -782,7 +895,11 @@ export default {
               color: pixel.color,
               userId: this.currentUserId,
               timestamp: new Date(pixel.timestamp),
-              status: 'cached'
+              status: 'cached',
+              // 云端格式的额外字段（草稿数据暂时为空）
+              objectId: null,
+              createdAt: null,
+              updatedAt: null
             }
 
             this.pixelData.set(pixel.key, pixelInfo)
@@ -858,25 +975,38 @@ export default {
         // 创建区块数据映射
         const chunkPixelData = new Map()
 
-        // 加载区块数据到本地
+        // 加载区块数据到本地（使用云端格式）
         results.forEach(result => {
-          const pixelKey = `${result.get('x')},${result.get('y')}`
+          const x = result.get('x')
+          const y = result.get('y')
+          const pixelKey = `${x},${y}`
+          
+          // 使用完整的云端格式数据结构
           const pixelData = {
+            x,
+            y,
             color: result.get('color'),
             userId: result.get('userId'),
-            timestamp: result.get('timestamp'),
-            status: 'saved'
+            timestamp: result.get('createdAt'),
+            status: 'saved',
+            // 保留完整的云端字段
+            objectId: result.id,
+            createdAt: result.get('createdAt'),
+            updatedAt: result.get('updatedAt')
           }
 
           chunkPixelData.set(pixelKey, pixelData)
           this.pixelData.set(pixelKey, pixelData)
         })
 
-        // 缓存区块数据
+        // 缓存区块数据到内存和本地存储（使用云端格式）
         this.chunkData.set(chunkKey, chunkPixelData)
         this.loadedChunks.add(chunkKey)
+        
+        // 保存到本地缓存（自动使用云端格式）
+        this.saveChunkToCache(chunkKey, chunkPixelData, chunkX, chunkY)
 
-        console.log(`已加载区块 ${chunkKey} (${tableName}): ${results.length} 个像素`)
+        console.log(`已加载区块 ${chunkKey} (${tableName}): ${results.length} 个像素（已缓存云端格式）`)
       } catch (error) {
         console.error(`加载区块 ${chunkKey} (${tableName}) 失败:`, error)
         // 抛出错误，让上层处理
@@ -1195,12 +1325,18 @@ export default {
           }
         }
 
-        // 更新像素数据
+        // 更新像素数据（使用云端格式）
         const pixelInfo = {
+          x: x,
+          y: y,
           color: this.selectedColor,
           userId: this.currentUserId,
           timestamp: new Date(),
-          status: 'cached' // 新绘制的像素标记为缓存状态
+          status: 'cached', // 新绘制的像素标记为缓存状态
+          // 云端格式的额外字段（本地绘制时暂时为空）
+          objectId: null,
+          createdAt: null,
+          updatedAt: null
         }
         this.pixelData.set(key, pixelInfo)
         // 记录用户新添加的像素
@@ -1712,10 +1848,21 @@ export default {
         // 清除本地草稿
         this.clearLocalDraft()
 
+        // 刷新涉及的区块缓存
+        console.log('开始刷新区块缓存...')
+        for (const [chunkKey, chunkGroup] of chunkGroups) {
+          try {
+            await this.refreshChunkCache(chunkKey, chunkGroup.chunkX, chunkGroup.chunkY)
+          } catch (error) {
+            console.error(`刷新区块 ${chunkKey} 缓存失败:`, error)
+          }
+        }
+        console.log('区块缓存刷新完成')
+
         this.lastSaved = new Date()
         this.hasUnsavedChanges = false
 
-        console.log(`保存完成: ${totalSavedCount} 个像素已保存，${totalSkippedCount} 个像素因时间戳较旧被跳过，涉及 ${chunkGroups.size} 个区块`)
+        console.log(`保存完成: ${totalSavedCount} 个像素已保存，${totalSkippedCount} 个像素因时间戳较旧被跳过，涉及 ${chunkGroups.size} 个区块，缓存已刷新`)
       } catch (error) {
         console.error(this.$t('saveFailed') + ':', error)
         this.showError(
@@ -2330,10 +2477,16 @@ export default {
         }
 
         const pixelInfo = {
+          x: x,
+          y: y,
           color: this.selectedColor,
           userId: this.currentUserId,
           timestamp: new Date(),
-          status: 'cached' // 新绘制的像素标记为缓存状态
+          status: 'cached', // 新绘制的像素标记为缓存状态
+          // 云端格式的额外字段（本地绘制时暂时为空）
+          objectId: null,
+          createdAt: null,
+          updatedAt: null
         }
 
         this.pixelData.set(key, pixelInfo)
