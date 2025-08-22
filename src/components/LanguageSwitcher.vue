@@ -186,7 +186,6 @@ export default {
   margin-left: auto;
 }
 
-/* 下拉动画 */
 .dropdown-enter-active,
 .dropdown-leave-active {
   transition: all 0.2s ease;
@@ -202,7 +201,6 @@ export default {
   transform: translateY(-8px) scale(0.95);
 }
 
-/* 响应式设计 */
 @media (max-width: 768px) {
   .language-dropdown {
     min-width: 120px;

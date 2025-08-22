@@ -77,16 +77,12 @@ export default {
       
       remainingTime.value = props.autoCloseDelay
       
-      // 清除之前的定时器
       clearTimeout(timer.value)
       clearInterval(interval.value)
       
-      // 设置自动关闭定时器
       timer.value = setTimeout(() => {
         emit('close')
       }, props.autoCloseDelay)
-      
-      // 设置进度更新间隔
       interval.value = setInterval(() => {
         remainingTime.value -= 100
         if (remainingTime.value <= 0) {
@@ -101,7 +97,6 @@ export default {
       emit('close')
     }
     
-    // 监听visible变化，开始倒计时
     watch(() => props.visible, (newVal) => {
       if (newVal) {
         startCountdown()
@@ -275,7 +270,6 @@ export default {
   box-shadow: 0 4px 12px rgba(255, 68, 68, 0.3);
 }
 
-/* 响应式设计 */
 @media (max-width: 768px) {
   .error-container {
     padding: 24px;

@@ -63,7 +63,6 @@ export default {
 </script>
 
 <style scoped>
-/* 弹窗遮罩层样式 */
 .modal-overlay {
   position: fixed;
   top: 0;
@@ -184,7 +183,6 @@ export default {
   color: white;
 }
 
-/* 通用section样式 - 用于AboutModal和HelpModal */
 .modal-section {
   margin-bottom: 25px;
 }
@@ -218,7 +216,6 @@ export default {
   text-decoration: underline;
 }
 
-/* 响应式设计 */
 @media (max-width: 768px) {
   .modal {
     margin: 20px;

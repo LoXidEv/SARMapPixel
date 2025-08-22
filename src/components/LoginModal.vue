@@ -88,7 +88,6 @@ export default {
       
       const userId = this.inputUserId.trim()
       
-      // 验证用户ID是否以'user_'开头
       if (!userId.startsWith('user_')) {
         alert(this.$t('userIdPrefixRequired'))
         return
