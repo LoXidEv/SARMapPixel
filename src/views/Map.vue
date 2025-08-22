@@ -56,7 +56,7 @@
       </div>
 
       <div class="tools">
-        <button class="tool-btn" @click="saveToCloud" :disabled="isLoading || isAutoSaving || isManualSaving || !currentUserId || userAddedPixels.size === 0">
+        <button class="tool-btn" @click="saveToCloud" :disabled="isAutoSaving || isManualSaving || !currentUserId">
           {{ $t('save') }}
         </button>
         <button class="tool-btn" @click="selectBrush" :class="{ active: !isErasing && !isColorPicking }"
@@ -115,12 +115,11 @@
 
 
     <!-- 画布容器 -->
-    <div class="canvas-container" ref="canvasContainer" 
-         @contextmenu.prevent @selectstart.prevent @dragstart.prevent>
+    <div class="canvas-container" ref="canvasContainer" @contextmenu.prevent @selectstart.prevent @dragstart.prevent>
       <div class="canvas-wrapper" :style="{ transform: `scale(${zoomLevel}) translate(${panX}px, ${panY}px)` }"
         @mousedown="startPan" @mousemove="handlePan" @mouseup="endPan" @mouseleave="endPan"
-        @touchstart="handleTouchStart" @touchmove="handleTouchMove" @touchend="handleTouchEnd"
-        @contextmenu.prevent @selectstart.prevent @dragstart.prevent>
+        @touchstart="handleTouchStart" @touchmove="handleTouchMove" @touchend="handleTouchEnd" @contextmenu.prevent
+        @selectstart.prevent @dragstart.prevent>
         <canvas ref="canvas" @click="drawPixel" @mousemove="handleMouseMove" @mouseleave="hidePreview"
           @touchstart="handleCanvasTouchStart" @touchmove="handleCanvasTouchMove" @touchend="handleCanvasTouchEnd"
           @contextmenu.prevent @selectstart.prevent @dragstart.prevent
@@ -374,8 +373,8 @@ export default {
 
   computed: {
     totalPixels() {
-      return this.chunk_ABCD_1234.size + this.chunk_ABCD_5678.size + 
-             this.chunk_EFGH_1234.size + this.chunk_EFGH_5678.size
+      return this.chunk_ABCD_1234.size + this.chunk_ABCD_5678.size +
+        this.chunk_EFGH_1234.size + this.chunk_EFGH_5678.size
     },
 
 
@@ -430,8 +429,6 @@ export default {
         this.globalLoading.text = this.$t('loadingPixelData')
         if (this.currentUserId) {
           await this.loadPixelData()
-        } else {
-          console.log('用户未登录，跳过数据加载')
         }
 
         // 任务4: 本地草稿现在通过区块加载系统自动处理
@@ -486,7 +483,7 @@ export default {
         // 检查缓存是否过期（兼容新旧格式的时间戳字段）
         const cacheTimestamp = cache.cacheTimestamp || cache.timestamp
         if (now - cacheTimestamp > this.cacheExpireTime) {
-          console.log(`区块 ${chunkKey} 缓存已过期，删除缓存`)
+          // 区块缓存已过期，删除缓存
           localStorage.removeItem(cacheKey)
           return null
         }
@@ -495,7 +492,7 @@ export default {
         const chunkData = new Map()
         cache.data.forEach(pixel => {
           const pixelKey = `${pixel.x},${pixel.y}`
-          
+
           // 统一使用云端格式的数据结构
           const pixelData = {
             x: pixel.x,
@@ -510,12 +507,12 @@ export default {
             createdAt: pixel.createdAt ? new Date(pixel.createdAt) : new Date(pixel.timestamp),
             updatedAt: pixel.updatedAt ? new Date(pixel.updatedAt) : new Date(pixel.timestamp)
           }
-          
+
           chunkData.set(pixelKey, pixelData)
         })
 
         const formatInfo = cache.dataFormat ? `（${cache.dataFormat}格式）` : ''
-        console.log(`区块 ${chunkKey} 从缓存加载了 ${chunkData.size} 个像素${formatInfo}`)
+        // 区块从缓存加载像素
         return chunkData
       } catch (error) {
         console.error(`获取区块 ${chunkKey} 缓存失败:`, error)
@@ -575,7 +572,7 @@ export default {
         const cacheKey = `chunk_cache_${chunkKey}`
         localStorage.setItem(cacheKey, JSON.stringify(cacheData))
 
-        console.log(`区块 ${chunkKey} (${chunkX},${chunkY}) 已保存到缓存（云端格式），包含 ${pixelArray.length} 个像素`)
+        // 区块已保存到缓存
       } catch (error) {
         console.error(`保存区块 ${chunkKey} 到缓存失败:`, error)
       }
@@ -604,7 +601,7 @@ export default {
       try {
         const cacheKey = `chunk_cache_${chunkKey}`
         localStorage.removeItem(cacheKey)
-        console.log(`区块 ${chunkKey} 的缓存已清除`)
+        // 区块缓存已清除
       } catch (error) {
         console.error(`清除区块 ${chunkKey} 缓存失败:`, error)
       }
@@ -620,23 +617,23 @@ export default {
       try {
         // 清除旧缓存
         this.clearChunkCache(chunkKey)
-        
+
         // 重新从云端加载区块数据
         const tableName = this.getChunkTableName(chunkX, chunkY)
         const ChunkTable = AV.Object.extend(tableName)
         const query = new AV.Query(ChunkTable)
-        
+
         // 设置查询限制为1000条记录（LeanCloud最大限制）
         query.limit(1000)
-        
+
         const results = await query.find()
         const chunkData = new Map()
-        
+
         results.forEach(result => {
           const x = result.get('x')
           const y = result.get('y')
           const key = `${x},${y}`
-          
+
           // 使用完整的云端格式数据结构
           const pixelData = {
             x,
@@ -650,14 +647,14 @@ export default {
             createdAt: result.get('createdAt'),
             updatedAt: result.get('updatedAt')
           }
-          
+
           chunkData.set(key, pixelData)
         })
-        
+
         // 保存新的缓存数据
         this.saveChunkToCache(chunkKey, chunkData, chunkX, chunkY)
-        
-        console.log(`区块 ${chunkKey} 缓存已刷新，包含 ${chunkData.size} 个像素`)
+
+        // 区块缓存已刷新
         return chunkData
       } catch (error) {
         console.error(`刷新区块 ${chunkKey} 缓存失败:`, error)
@@ -677,53 +674,53 @@ export default {
         const tableName = this.getChunkTableName(chunkX, chunkY)
         const ChunkTable = AV.Object.extend(tableName)
         const query = new AV.Query(ChunkTable)
-        
+
         // 查询区块内所有像素数据
         // 设置查询限制为1000条记录（LeanCloud最大限制）
         query.limit(1000)
         const results = await query.find()
-        
+
         if (results.length > 0) {
           // 批量删除云端数据
           await AV.Object.destroyAll(results)
-          console.log(`已删除区块 ${chunkKey} (${tableName}) 的 ${results.length} 个像素数据`)
+          // 已删除区块像素数据
         } else {
-          console.log(`区块 ${chunkKey} (${tableName}) 没有数据需要删除`)
+          // 区块没有数据需要删除
         }
-        
+
         // 清除本地缓存
         this.clearChunkCache(chunkKey)
-        
+
         // 从内存中移除区块数据
         this.loadedChunks.delete(chunkKey)
-        
+
         // 清空对应的区块变量
         const chunkVariable = this.getChunkVariable(chunkX, chunkY)
-        
+
         // 从userAddedPixels中移除该区块的所有像素
         const bigChunkWidth = Math.ceil((this.canvas?.width || 800) / 2)
         const bigChunkHeight = Math.ceil((this.canvas?.height || 600) / 2)
-        
+
         const minX = chunkX * bigChunkWidth
         const maxX = Math.min((chunkX + 1) * bigChunkWidth - 1, (this.canvas?.width || 800) - 1)
         const minY = chunkY * bigChunkHeight
         const maxY = Math.min((chunkY + 1) * bigChunkHeight - 1, (this.canvas?.height || 600) - 1)
-        
+
         for (let x = minX; x <= maxX; x++) {
           for (let y = minY; y <= maxY; y++) {
             const pixelKey = `${x},${y}`
             this.userAddedPixels.delete(pixelKey)
           }
         }
-        
+
         // 清空整个区块变量
         chunkVariable.clear()
-        
+
         // 重新绘制画布
         this.drawBackground()
         this.drawAllPixels()
-        
-        console.log(`区块 ${chunkKey} 的所有数据已完全删除`)
+
+        // 区块的所有数据已完全删除
         return true
       } catch (error) {
         console.error(`删除区块 ${chunkKey} 数据失败:`, error)
@@ -752,10 +749,10 @@ export default {
       // 计算大区块的实际尺寸
       const canvasWidth = this.canvas?.width || 800
       const canvasHeight = this.canvas?.height || 600
-      
+
       const bigChunkWidth = Math.ceil(canvasWidth / 2)
       const bigChunkHeight = Math.ceil(canvasHeight / 2)
-      
+
       return {
         chunkX: Math.floor(x / bigChunkWidth),
         chunkY: Math.floor(y / bigChunkHeight)
@@ -808,29 +805,29 @@ export default {
       throw new Error(`无效的区块坐标: (${chunkX}, ${chunkY})`)
     },
 
-     /**
-      * 根据像素坐标获取对应的区块变量
-      * @param {number} pixelX - 像素X坐标
-      * @param {number} pixelY - 像素Y坐标
-      * @returns {Map} 对应的区块变量
-      */
-     getPixelChunkVariable(pixelX, pixelY) {
-       const canvasWidth = this.canvas?.width || 800
-       const canvasHeight = this.canvas?.height || 600
-       
-       const bigChunkWidth = Math.ceil(canvasWidth / 2)
-       const bigChunkHeight = Math.ceil(canvasHeight / 2)
-       
-       const chunkX = Math.floor(pixelX / bigChunkWidth)
-       const chunkY = Math.floor(pixelY / bigChunkHeight)
-       
-       return this.getChunkVariable(chunkX, chunkY)
-     },
+    /**
+     * 根据像素坐标获取对应的区块变量
+     * @param {number} pixelX - 像素X坐标
+     * @param {number} pixelY - 像素Y坐标
+     * @returns {Map} 对应的区块变量
+     */
+    getPixelChunkVariable(pixelX, pixelY) {
+      const canvasWidth = this.canvas?.width || 800
+      const canvasHeight = this.canvas?.height || 600
 
-     /**
-      * 获取当前视口可见的区块列表
-      * @returns {Array} 可见区块列表 [{chunkX, chunkY, chunkKey, tableName}]
-      */
+      const bigChunkWidth = Math.ceil(canvasWidth / 2)
+      const bigChunkHeight = Math.ceil(canvasHeight / 2)
+
+      const chunkX = Math.floor(pixelX / bigChunkWidth)
+      const chunkY = Math.floor(pixelY / bigChunkHeight)
+
+      return this.getChunkVariable(chunkX, chunkY)
+    },
+
+    /**
+     * 获取当前视口可见的区块列表
+     * @returns {Array} 可见区块列表 [{chunkX, chunkY, chunkKey, tableName}]
+     */
     getVisibleChunks() {
       if (!this.canvas) return []
 
@@ -845,7 +842,7 @@ export default {
       const endChunkX = Math.ceil(viewportRight / this.chunkSize)
       const startChunkY = Math.max(0, Math.floor(viewportTop / this.chunkSize))
       const endChunkY = Math.ceil(viewportBottom / this.chunkSize)
-      
+
       // 计算画布需要的总区块数，确保完全覆盖
       const maxChunkX = Math.ceil(this.canvas.width / this.chunkSize)
       const maxChunkY = Math.ceil(this.canvas.height / this.chunkSize)
@@ -879,7 +876,7 @@ export default {
         // 按顺序加载所有区块 A1-H8
         await this.loadAllChunksSequentially()
 
-        console.log('所有区块加载完成')
+        // 所有区块加载完成
       } catch (error) {
         console.error(this.$t('loadPixelDataFailed') + ':', error)
       }
@@ -920,16 +917,16 @@ export default {
           tableName
         }
 
-        console.log(`开始加载区块 ${name}...`)
+        // 开始加载区块
 
         try {
           // 检查缓存和时间间隔
           const cachedData = this.getChunkFromCache(chunkKey)
           const now = Date.now()
           const shouldRequestCloud = !cachedData || (now - this.lastCloudRequestTime > this.cacheExpireTime)
-          
+
           if (cachedData && !shouldRequestCloud) {
-            console.log(`区块 ${name} 从缓存加载（距离上次云端请求未超过5分钟）`)
+            // 区块从缓存加载
             // 获取对应的区块变量并加载缓存数据
             const chunkVariable = this.getChunkVariable(chunkX, chunkY)
             chunkVariable.clear()
@@ -938,18 +935,18 @@ export default {
             })
           } else {
             if (cachedData && shouldRequestCloud) {
-              console.log(`区块 ${name} 缓存存在但已超过5分钟，重新请求云端数据`)
+              // 区块缓存存在但已超过5分钟，重新请求云端数据
             } else {
-              console.log(`区块 ${name} 无缓存，请求云端数据`)
+              // 区块无缓存，请求云端数据
             }
-            
+
             // 从云端加载数据
             await this.loadSingleChunk(chunk)
-            console.log(`区块 ${name} 云端数据加载成功`)
+            // 区块云端数据加载成功
 
             // 更新最后请求时间
             this.lastCloudRequestTime = now
-            
+
             // 保存到缓存
             const chunkVariable = this.getChunkVariable(chunkX, chunkY)
             this.saveChunkToCache(chunkKey, chunkVariable, chunkX, chunkY)
@@ -1002,13 +999,13 @@ export default {
     getPixelChunkKey(x, y) {
       const canvasWidth = this.canvas?.width || 800
       const canvasHeight = this.canvas?.height || 600
-      
+
       const bigChunkWidth = Math.ceil(canvasWidth / 2)
       const bigChunkHeight = Math.ceil(canvasHeight / 2)
-      
+
       const chunkX = Math.floor(x / bigChunkWidth)
       const chunkY = Math.floor(y / bigChunkHeight)
-      
+
       return `${chunkX},${chunkY}`
     },
 
@@ -1022,7 +1019,7 @@ export default {
         const chunkKey = `${chunkX},${chunkY}`
         const draftKey = `pixelArtDraft_${chunkKey}`
         const draftData = localStorage.getItem(draftKey)
-        
+
         // 如果没有该区块的草稿，尝试从旧格式加载
         if (!draftData) {
           this.loadLegacyDraftForChunk(chunkX, chunkY)
@@ -1062,7 +1059,7 @@ export default {
         })
 
         if (loadedCount > 0) {
-          console.log(`区块 ${String.fromCharCode(65 + chunkX)}${chunkY + 1} 加载了 ${loadedCount} 个本地草稿像素（新格式）`)
+          // 区块加载了本地草稿像素（新格式）
           this.hasUnsavedChanges = true
         }
       } catch (error) {
@@ -1088,10 +1085,10 @@ export default {
         // 计算大区块范围
         const canvasWidth = this.canvas?.width || 800
         const canvasHeight = this.canvas?.height || 600
-        
+
         const bigChunkWidth = Math.ceil(canvasWidth / 2)
         const bigChunkHeight = Math.ceil(canvasHeight / 2)
-        
+
         const minX = chunkX * bigChunkWidth
         const maxX = Math.min((chunkX + 1) * bigChunkWidth - 1, canvasWidth - 1)
         const minY = chunkY * bigChunkHeight
@@ -1129,7 +1126,7 @@ export default {
         })
 
         if (loadedCount > 0) {
-          console.log(`区块 ${String.fromCharCode(65 + chunkX)}${chunkY + 1} 加载了 ${loadedCount} 个本地草稿像素`)
+          // 区块加载了本地草稿像素
           this.hasUnsavedChanges = true
         }
       } catch (error) {
@@ -1167,11 +1164,11 @@ export default {
         // 4个大区块系统：每个区块覆盖画布的1/4区域
         const canvasWidth = this.canvas?.width || 800
         const canvasHeight = this.canvas?.height || 600
-        
+
         // 计算大区块的实际尺寸
         const bigChunkWidth = Math.ceil(canvasWidth / 2)
         const bigChunkHeight = Math.ceil(canvasHeight / 2)
-        
+
         const minX = chunkX * bigChunkWidth
         const maxX = Math.min((chunkX + 1) * bigChunkWidth - 1, canvasWidth - 1)
         const minY = chunkY * bigChunkHeight
@@ -1181,7 +1178,7 @@ export default {
         query.lessThanOrEqualTo('x', maxX)
         query.greaterThanOrEqualTo('y', minY)
         query.lessThanOrEqualTo('y', maxY)
-        
+
         // 设置查询限制为1000条记录（LeanCloud最大限制）
         query.limit(1000)
 
@@ -1189,7 +1186,7 @@ export default {
 
         // 获取对应的区块变量
         const chunkVariable = this.getChunkVariable(chunkX, chunkY)
-        
+
         // 清空该区块的现有数据
         chunkVariable.clear()
 
@@ -1198,7 +1195,7 @@ export default {
           const x = result.get('x')
           const y = result.get('y')
           const pixelKey = `${x},${y}`
-          
+
           // 使用完整的云端格式数据结构
           const pixelData = {
             x,
@@ -1218,11 +1215,11 @@ export default {
 
         // 标记区块已加载
         this.loadedChunks.add(chunkKey)
-        
+
         // 保存到本地缓存（使用区块变量数据）
         this.saveChunkToCache(chunkKey, chunkVariable, chunkX, chunkY)
 
-        console.log(`已加载区块 ${chunkKey} (${tableName}): ${results.length} 个像素（已缓存云端格式）`)
+        // 已加载区块像素（已缓存云端格式）
       } catch (error) {
         console.error(`加载区块 ${chunkKey} (${tableName}) 失败:`, error)
         // 抛出错误，让上层处理
@@ -1295,7 +1292,7 @@ export default {
         this.chunk_EFGH_1234,
         this.chunk_EFGH_5678
       ]
-      
+
       chunkVariables.forEach(chunkVariable => {
         chunkVariable.forEach((pixelInfo, key) => {
           const [x, y] = key.split(',').map(Number)
@@ -1347,10 +1344,10 @@ export default {
       // 计算大区块的实际尺寸和位置
       const canvasWidth = this.canvas?.width || 800
       const canvasHeight = this.canvas?.height || 600
-      
+
       const bigChunkWidth = Math.ceil(canvasWidth / 2)
       const bigChunkHeight = Math.ceil(canvasHeight / 2)
-      
+
       const startX = chunkX * bigChunkWidth
       const startY = chunkY * bigChunkHeight
       const chunkWidth = Math.min(bigChunkWidth, canvasWidth - startX)
@@ -1525,7 +1522,7 @@ export default {
         // 获取对应的区块变量
         const chunkVariable = this.getPixelChunkVariable(x, y)
         const existingPixel = chunkVariable.get(key)
-        
+
         if (existingPixel && existingPixel.userId === this.currentUserId) {
           // 从区块变量中删除像素
           chunkVariable.delete(key)
@@ -1916,7 +1913,7 @@ export default {
         const userExists = await this.validateUser(userId)
         if (!userExists) {
           // 如果用户不存在，自动创建用户记录
-          console.log(this.$t('userNotExistCreating') + ':', userId)
+          // 用户不存在，正在创建
           await this.createUserRecord(userId)
         }
 
@@ -1933,7 +1930,7 @@ export default {
         this.globalLoading.showProgress = true
         this.globalLoading.completedTasks = 0
         this.globalLoading.totalTasks = 3
-        
+
         // 重新初始化应用程序
         await this.initializeApp()
       } catch (error) {
@@ -1945,7 +1942,6 @@ export default {
         )
       } finally {
         await this.setLoadingState(false)
-        this.isManualSaving = false
       }
     },
 
@@ -1990,7 +1986,7 @@ export default {
         this.globalLoading.showProgress = true
         this.globalLoading.completedTasks = 0
         this.globalLoading.totalTasks = 3
-        
+
         // 重新初始化应用程序
         await this.initializeApp()
       } catch (error) {
@@ -2028,7 +2024,7 @@ export default {
       try {
         // 只保存用户新添加的像素
         if (this.userAddedPixels.size === 0) {
-          console.log(this.$t('noNewPixelsToSave'))
+          // 没有新像素需要保存
           this.showError(
             this.$t('save'),
             this.$t('noNewPixelsToSave'),
@@ -2061,30 +2057,30 @@ export default {
 
         let totalSavedCount = 0
         let totalSkippedCount = 0
-        
+
 
 
         // 按顺序逐个处理每个区块，间隔1秒
         const chunkArray = Array.from(chunkGroups.entries())
         for (let i = 0; i < chunkArray.length; i++) {
           const [chunkKey, chunkGroup] = chunkArray[i]
-          
-          console.log(`正在保存区块 ${chunkKey} (${i + 1}/${chunkArray.length})...`)
-          
+
+          // 正在保存区块
+
           try {
             const { savedCount, skippedCount } = await this.saveChunkData(chunkGroup)
             totalSavedCount += savedCount
             totalSkippedCount += skippedCount
-            
-            console.log(`区块 ${chunkKey} 保存完成: ${savedCount} 个像素已保存，${skippedCount} 个像素被跳过`)
+
+            // 区块保存完成
           } catch (error) {
             console.error(`区块 ${chunkKey} 保存失败:`, error)
             throw error // 重新抛出错误以中断保存流程
           }
-          
+
           // 如果不是最后一个区块，等待1秒
           if (i < chunkArray.length - 1) {
-            console.log('等待1秒后继续保存下一个区块...')
+            // 等待1秒后继续保存下一个区块
             await new Promise(resolve => setTimeout(resolve, 1000))
           }
         }
@@ -2104,7 +2100,7 @@ export default {
         // 重新绘制画布以移除透明度
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
         this.drawBackground()
-        
+
         // 使用drawAllPixels方法重绘所有像素
         this.drawAllPixels()
 
@@ -2115,31 +2111,31 @@ export default {
         this.clearLocalDraft()
 
         // 刷新涉及的区块缓存，间隔1秒
-        console.log('开始刷新区块缓存...')
+        // 开始刷新区块缓存
         for (let i = 0; i < chunkArray.length; i++) {
           const [chunkKey, chunkGroup] = chunkArray[i]
-          
-          console.log(`正在刷新区块 ${chunkKey} 缓存 (${i + 1}/${chunkArray.length})...`)
-          
+
+          // 正在刷新区块缓存
+
           try {
             await this.refreshChunkCache(chunkKey, chunkGroup.chunkX, chunkGroup.chunkY)
-            console.log(`区块 ${chunkKey} 缓存刷新完成`)
+            // 区块缓存刷新完成
           } catch (error) {
             console.error(`刷新区块 ${chunkKey} 缓存失败:`, error)
           }
-          
+
           // 如果不是最后一个区块，等待1秒
           if (i < chunkArray.length - 1) {
-            console.log('等待1秒后继续刷新下一个区块缓存...')
+            // 等待1秒后继续刷新下一个区块缓存
             await new Promise(resolve => setTimeout(resolve, 1000))
           }
         }
-        console.log('区块缓存刷新完成')
+        // 区块缓存刷新完成
 
         this.lastSaved = new Date()
         this.hasUnsavedChanges = false
 
-        console.log(`保存完成: ${totalSavedCount} 个像素已保存，${totalSkippedCount} 个像素因时间戳较旧被跳过，涉及 ${chunkGroups.size} 个区块，缓存已刷新`)
+        // 保存完成
       } catch (error) {
         console.error(this.$t('saveFailed') + ':', error)
         this.showError(
@@ -2149,6 +2145,7 @@ export default {
         )
       } finally {
         await this.setLoadingState(false)
+        this.isManualSaving = false
       }
     },
 
@@ -2165,7 +2162,7 @@ export default {
 
       // 如果有新区块需要加载
       if (newChunks.length > 0) {
-        console.log(`检测到 ${newChunks.length} 个新区块需要加载:`, newChunks)
+        // 检测到新区块需要加载
         this.loadChunks(newChunks)
       }
 
@@ -2230,10 +2227,10 @@ export default {
             existingPixel.set('timestamp', pixelInfo.timestamp)
             objectsToSave.push(existingPixel)
             savedCount++
-            console.log(`更新像素 (${x},${y}) 在表 ${tableName}: 新时间戳 ${newTimestamp.toISOString()} > 旧时间戳 ${existingTimestamp.toISOString()}`)
+            // 更新像素
           } else {
             skippedCount++
-            console.log(`跳过像素 (${x},${y}) 在表 ${tableName}: 新时间戳 ${newTimestamp.toISOString()} <= 旧时间戳 ${existingTimestamp.toISOString()}`)
+            // 跳过像素
           }
         } else {
           // 如果不存在，创建新记录
@@ -2245,7 +2242,7 @@ export default {
           pixelRecord.set('timestamp', pixelInfo.timestamp)
           objectsToSave.push(pixelRecord)
           savedCount++
-          console.log(`创建新像素 (${x},${y}) 在表 ${tableName}`)
+          // 创建新像素
         }
       }
 
@@ -2266,7 +2263,7 @@ export default {
         // 使用区块加载模式重新加载数据
         await this.loadPixelData()
 
-        console.log('已使用区块模式重新加载像素数据')
+        // 已使用区块模式重新加载像素数据
       } catch (error) {
         console.error(this.$t('loadFailed') + ':', error)
         this.showError(
@@ -2292,22 +2289,22 @@ export default {
         for (let chunkY = 0; chunkY < 2; chunkY++) {
           for (let chunkX = 0; chunkX < 2; chunkX++) {
             const chunkKey = this.getChunkKey(chunkX, chunkY)
-            
+
             try {
               // 刷新区块缓存（重新从云端加载）
               const chunkData = await this.refreshChunkCache(chunkKey, chunkX, chunkY)
-              
+
               if (chunkData) {
                 // 处理区块中的每个像素，检查与本地草稿的冲突
                 chunkData.forEach((cloudPixelInfo, pixelKey) => {
                   const localPixel = localDraftPixels.get(pixelKey)
-                  
+
                   if (localPixel && localPixel.status === 'cached') {
                     // 如果云端时间戳更新，直接替换本地数据
                     if (cloudPixelInfo.timestamp > localPixel.timestamp) {
                       this.pixelData.set(pixelKey, cloudPixelInfo)
                       this.userAddedPixels.delete(pixelKey) // 移除本地草稿
-                      console.log(`像素 ${pixelKey} 被云端数据替换`)
+                      // 像素被云端数据替换
                     } else {
                       // 保留本地数据
                       this.pixelData.set(pixelKey, localPixel)
@@ -2316,7 +2313,7 @@ export default {
                     // 没有冲突，直接使用云端数据
                     this.pixelData.set(pixelKey, cloudPixelInfo)
                   }
-                  
+
                   totalProcessedPixels++
                 })
               }
@@ -2331,7 +2328,7 @@ export default {
         this.drawBackground()
         this.drawAllPixels()
 
-        console.log(`自动加载完成，处理了 ${totalProcessedPixels} 个云端像素`)
+        // 自动加载完成
       } catch (error) {
         console.error('自动加载失败:', error)
         // 自动加载失败时不显示错误提示，避免打扰用户
@@ -2354,7 +2351,7 @@ export default {
         // 检查缓存
         const cached = this.userValidationCache.get(userId)
         if (cached && (Date.now() - cached.timestamp) < this.userValidationCacheTimeout) {
-          console.log(`使用缓存的用户验证结果: ${userId} -> ${cached.exists}`)
+          // 使用缓存的用户验证结果
           return cached.exists
         }
 
@@ -2364,14 +2361,14 @@ export default {
         query.equalTo('userId', userId)
         const user = await query.first()
         const exists = !!user
-        
+
         // 缓存结果
         this.userValidationCache.set(userId, {
           exists: exists,
           timestamp: Date.now()
         })
-        
-        console.log(`查询数据库用户验证结果: ${userId} -> ${exists}`)
+
+        // 查询数据库用户验证结果
         return exists
       } catch (error) {
         console.error(this.$t('validateUserFailed') + ':', error)
@@ -2389,14 +2386,14 @@ export default {
         user.set('userId', userId)
         user.set('lastLoginAt', new Date())
         await user.save()
-        
+
         // 更新缓存，标记用户存在
         this.userValidationCache.set(userId, {
           exists: true,
           timestamp: Date.now()
         })
-        
-        console.log(this.$t('userRecordCreated') + ':', userId)
+
+        // 用户记录已创建
       } catch (error) {
         console.error(this.$t('createUserRecordFailed') + ':', error)
         throw error
@@ -2409,10 +2406,10 @@ export default {
     clearUserValidationCache(userId = null) {
       if (userId) {
         this.userValidationCache.delete(userId)
-        console.log(`清除用户 ${userId} 的验证缓存`)
+        // 清除用户验证缓存
       } else {
         this.userValidationCache.clear()
-        console.log('清除所有用户验证缓存')
+        // 清除所有用户验证缓存
       }
     },
 
@@ -2531,16 +2528,16 @@ export default {
       try {
         // 按区块分组保存草稿
         const chunkDrafts = new Map()
-        
+
         // 将用户添加的像素按区块分组
         for (const [key, pixel] of this.userAddedPixels) {
           const [x, y] = key.split(',').map(Number)
           const chunkKey = this.getPixelChunkKey(x, y)
-          
+
           if (!chunkDrafts.has(chunkKey)) {
             chunkDrafts.set(chunkKey, [])
           }
-          
+
           chunkDrafts.get(chunkKey).push({
             key,
             x,
@@ -2549,7 +2546,7 @@ export default {
             timestamp: pixel.timestamp
           })
         }
-        
+
         // 为每个区块单独保存草稿
         for (const [chunkKey, pixels] of chunkDrafts) {
           const draftData = {
@@ -2558,12 +2555,12 @@ export default {
             pixels,
             savedAt: Date.now()
           }
-          
+
           const draftKey = `pixelArtDraft_${chunkKey}`
           localStorage.setItem(draftKey, JSON.stringify(draftData))
         }
-        
-        console.log(`草稿已按区块自动保存到本地，涉及 ${chunkDrafts.size} 个区块`)
+
+        // 草稿已按区块自动保存到本地
       } catch (error) {
         console.error('自动保存草稿失败:', error)
       } finally {
@@ -2581,7 +2578,7 @@ export default {
     loadDraftFromLocal() {
       // 本地草稿数据现在通过区块加载系统自动处理
       // 在loadAllChunksSequentially中会调用loadLocalDraftForChunk
-      console.log('本地草稿数据将通过区块加载系统自动处理')
+      // 本地草稿数据将通过区块加载系统自动处理
     },
 
     /**
@@ -2590,7 +2587,7 @@ export default {
     clearLocalDraft() {
       // 清除旧的统一草稿格式
       localStorage.removeItem('pixelArtDraft')
-      
+
       // 清除所有区块的草稿
       const keys = Object.keys(localStorage)
       keys.forEach(key => {
@@ -2598,8 +2595,8 @@ export default {
           localStorage.removeItem(key)
         }
       })
-      
-      console.log('所有区块草稿已清除')
+
+      // 所有区块草稿已清除
     },
 
 
