@@ -351,7 +351,7 @@ export default {
   },
 
   methods: {
-    
+
     async initializeApp() {
       try {
         this.loadingStartTime = Date.now()
@@ -403,36 +403,30 @@ export default {
         const cacheKey = `chunk_cache_${chunkKey}`
         const cachedData = localStorage.getItem(cacheKey)
 
-        if (!cachedData) {
-          return null
-        }
+        if (!cachedData) return null
 
         const cache = JSON.parse(cachedData)
-        const now = Date.now()
-
         const cacheTimestamp = cache.cacheTimestamp || cache.timestamp
-        if (now - cacheTimestamp > this.cacheExpireTime) {
+
+        if (Date.now() - cacheTimestamp > this.cacheExpireTime) {
           localStorage.removeItem(cacheKey)
           return null
         }
 
         const chunkData = new Map()
         cache.data.forEach(pixel => {
-          const pixelKey = `${pixel.x},${pixel.y}`
-
-          const pixelData = {
+          const timestamp = pixel.createdAt ? new Date(pixel.createdAt) : new Date(pixel.timestamp)
+          chunkData.set(`${pixel.x},${pixel.y}`, {
             x: pixel.x,
             y: pixel.y,
             color: pixel.color,
             userId: pixel.userId,
-            timestamp: pixel.createdAt ? new Date(pixel.createdAt) : new Date(pixel.timestamp),
+            timestamp,
             status: 'saved',
             objectId: pixel.objectId,
-            createdAt: pixel.createdAt ? new Date(pixel.createdAt) : new Date(pixel.timestamp),
-            updatedAt: pixel.updatedAt ? new Date(pixel.updatedAt) : new Date(pixel.timestamp)
-          }
-
-          chunkData.set(pixelKey, pixelData)
+            createdAt: timestamp,
+            updatedAt: pixel.updatedAt ? new Date(pixel.updatedAt) : timestamp
+          })
         })
 
         return chunkData
@@ -444,9 +438,7 @@ export default {
 
     saveChunkToCache(chunkKey, chunkData, chunkX = null, chunkY = null) {
       try {
-        if (!chunkData || chunkData.size === 0) {
-          return
-        }
+        if (!chunkData?.size) return
 
         if (chunkX === null || chunkY === null) {
           const coords = this.parseChunkKey(chunkKey)
@@ -454,19 +446,18 @@ export default {
           chunkY = coords.chunkY
         }
 
-        const pixelArray = []
-        chunkData.forEach((pixel, pixelKey) => {
-          const cloudFormatPixel = {
-            objectId: `cache_${pixelKey}_${Date.now()}`,
+        const pixelArray = Array.from(chunkData.values()).map(pixel => {
+          const timestamp = pixel.timestamp instanceof Date ? pixel.timestamp : new Date(pixel.timestamp)
+          return {
+            objectId: pixel.objectId || `cache_${pixel.x}_${pixel.y}_${Date.now()}`,
             x: pixel.x,
             y: pixel.y,
             color: pixel.color,
             userId: pixel.userId,
-            createdAt: pixel.timestamp instanceof Date ? pixel.timestamp : new Date(pixel.timestamp),
-            updatedAt: pixel.timestamp instanceof Date ? pixel.timestamp : new Date(pixel.timestamp),
-            timestamp: pixel.timestamp instanceof Date ? pixel.timestamp : new Date(pixel.timestamp)
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            timestamp
           }
-          pixelArray.push(cloudFormatPixel)
         })
 
         const cacheData = {
@@ -480,9 +471,7 @@ export default {
           version: '2.0'
         }
 
-        const cacheKey = `chunk_cache_${chunkKey}`
-        localStorage.setItem(cacheKey, JSON.stringify(cacheData))
-
+        localStorage.setItem(`chunk_cache_${chunkKey}`, JSON.stringify(cacheData))
       } catch (error) {
         console.error(`保存区块 ${chunkKey} 到缓存失败:`, error)
       }
@@ -500,9 +489,7 @@ export default {
 
     clearChunkCache(chunkKey) {
       try {
-        const cacheKey = `chunk_cache_${chunkKey}`
-        localStorage.removeItem(cacheKey)
-
+        localStorage.removeItem(`chunk_cache_${chunkKey}`)
       } catch (error) {
         console.error(`清除区块 ${chunkKey} 缓存失败:`, error)
       }
@@ -597,13 +584,24 @@ export default {
       this.globalLoading.completedTasks = completedTasks
     },
 
+    // 缓存画布尺寸计算
+    getCanvasDimensions() {
+      if (!this._canvasDimensions || this._lastCanvasWidth !== this.canvas?.width) {
+        const canvasWidth = this.canvas?.width || 800
+        const canvasHeight = this.canvas?.height || 600
+        this._canvasDimensions = {
+          width: canvasWidth,
+          height: canvasHeight,
+          bigChunkWidth: Math.ceil(canvasWidth / 2),
+          bigChunkHeight: Math.ceil(canvasHeight / 2)
+        }
+        this._lastCanvasWidth = canvasWidth
+      }
+      return this._canvasDimensions
+    },
+
     pixelToChunk(x, y) {
-      const canvasWidth = this.canvas?.width || 800
-      const canvasHeight = this.canvas?.height || 600
-
-      const bigChunkWidth = Math.ceil(canvasWidth / 2)
-      const bigChunkHeight = Math.ceil(canvasHeight / 2)
-
+      const { bigChunkWidth, bigChunkHeight } = this.getCanvasDimensions()
       return {
         chunkX: Math.floor(x / bigChunkWidth),
         chunkY: Math.floor(y / bigChunkHeight)
@@ -614,37 +612,30 @@ export default {
       return `${chunkX},${chunkY}`
     },
 
+    // 优化表名获取，使用数组索引
     getChunkTableName(chunkX, chunkY) {
       const tableNames = [
         ['GlobalPixelsABCD1234', 'GlobalPixelsEFGH1234'],
         ['GlobalPixelsABCD5678', 'GlobalPixelsEFGH5678']
       ]
-      return tableNames[chunkY % 2][chunkX % 2]
+      return tableNames[chunkY & 1][chunkX & 1] // 使用位运算替代模运算
     },
 
+    // 优化区块变量获取，使用数组映射
     getChunkVariable(chunkX, chunkY) {
-      if (chunkX === 0 && chunkY === 0) {
-        return this.chunk_ABCD_1234
-      } else if (chunkX === 1 && chunkY === 0) {
-        return this.chunk_EFGH_1234
-      } else if (chunkX === 0 && chunkY === 1) {
-        return this.chunk_ABCD_5678
-      } else if (chunkX === 1 && chunkY === 1) {
-        return this.chunk_EFGH_5678
+      const chunkMap = [
+        [this.chunk_ABCD_1234, this.chunk_EFGH_1234],
+        [this.chunk_ABCD_5678, this.chunk_EFGH_5678]
+      ]
+
+      if (chunkX >= 0 && chunkX <= 1 && chunkY >= 0 && chunkY <= 1) {
+        return chunkMap[chunkY][chunkX]
       }
       throw new Error(`无效的区块坐标: (${chunkX}, ${chunkY})`)
     },
 
     getPixelChunkVariable(pixelX, pixelY) {
-      const canvasWidth = this.canvas?.width || 800
-      const canvasHeight = this.canvas?.height || 600
-
-      const bigChunkWidth = Math.ceil(canvasWidth / 2)
-      const bigChunkHeight = Math.ceil(canvasHeight / 2)
-
-      const chunkX = Math.floor(pixelX / bigChunkWidth)
-      const chunkY = Math.floor(pixelY / bigChunkHeight)
-
+      const { chunkX, chunkY } = this.pixelToChunk(pixelX, pixelY)
       return this.getChunkVariable(chunkX, chunkY)
     },
 
@@ -1009,15 +1000,13 @@ export default {
     },
 
     drawBackground() {
-      if (this.mapImage && this.mapImage.complete) {
-
+      if (this.mapImage?.complete) {
         this.ctx.globalAlpha = 1.0
         this.ctx.drawImage(this.mapImage, 0, 0)
       }
     },
 
     drawAllPixels() {
-
       const chunkVariables = [
         this.chunk_ABCD_1234,
         this.chunk_ABCD_5678,
@@ -1025,41 +1014,77 @@ export default {
         this.chunk_EFGH_5678
       ]
 
+      const cachedPixels = []
+      const savedPixels = []
+
       chunkVariables.forEach(chunkVariable => {
         chunkVariable.forEach((pixelInfo, key) => {
           const [x, y] = key.split(',').map(Number)
           const color = typeof pixelInfo === 'string' ? pixelInfo : pixelInfo.color
           const status = typeof pixelInfo === 'object' ? pixelInfo.status : 'saved'
-          this.drawSinglePixel(x, y, color, status)
+
+          const pixel = { x, y, color }
+          if (status === 'cached') {
+            cachedPixels.push(pixel)
+          } else {
+            savedPixels.push(pixel)
+          }
         })
       })
+
+      this.ctx.globalAlpha = 1.0
+      savedPixels.forEach(({ x, y, color }) => {
+        this.ctx.fillStyle = color
+        this.ctx.fillRect(x, y, this.pixelSize, this.pixelSize)
+      })
+
+      this.ctx.globalAlpha = 0.5
+      cachedPixels.forEach(({ x, y, color }) => {
+        this.ctx.fillStyle = color
+        this.ctx.fillRect(x, y, this.pixelSize, this.pixelSize)
+      })
+
+      this.ctx.globalAlpha = 1.0
     },
 
     drawSinglePixel(x, y, color, status = 'saved') {
-
-      if (status === 'cached') {
-
-        this.ctx.globalAlpha = 0.5
-      } else {
-
-        this.ctx.globalAlpha = 1.0
-      }
-
+      this.ctx.globalAlpha = status === 'cached' ? 0.5 : 1.0
       this.ctx.fillStyle = color
       this.ctx.fillRect(x, y, this.pixelSize, this.pixelSize)
-
       this.ctx.globalAlpha = 1.0
     },
 
     drawChunk(chunkX, chunkY) {
       const chunkVariable = this.getChunkVariable(chunkX, chunkY)
+      if (!chunkVariable?.size) return
 
-      if (chunkVariable && chunkVariable.size > 0) {
-        chunkVariable.forEach((pixelInfo, pixelKey) => {
-          const [x, y] = pixelKey.split(',').map(Number)
-          this.drawSinglePixel(x, y, pixelInfo.color, pixelInfo.status)
-        })
-      }
+      const cachedPixels = []
+      const savedPixels = []
+
+      chunkVariable.forEach((pixelInfo, pixelKey) => {
+        const [x, y] = pixelKey.split(',').map(Number)
+        const pixel = { x, y, color: pixelInfo.color }
+
+        if (pixelInfo.status === 'cached') {
+          cachedPixels.push(pixel)
+        } else {
+          savedPixels.push(pixel)
+        }
+      })
+
+      this.ctx.globalAlpha = 1.0
+      savedPixels.forEach(({ x, y, color }) => {
+        this.ctx.fillStyle = color
+        this.ctx.fillRect(x, y, this.pixelSize, this.pixelSize)
+      })
+
+      this.ctx.globalAlpha = 0.5
+      cachedPixels.forEach(({ x, y, color }) => {
+        this.ctx.fillStyle = color
+        this.ctx.fillRect(x, y, this.pixelSize, this.pixelSize)
+      })
+
+      this.ctx.globalAlpha = 1.0
     },
 
     drawChunkError(chunkX, chunkY, chunkName) {
@@ -1152,7 +1177,6 @@ export default {
           this.hidePreview()
           return
         } catch (error) {
-
           console.log('EyeDropper cancelled or failed:', error)
         }
       }
@@ -1166,184 +1190,144 @@ export default {
       }
     },
 
-    drawPixel(event) {
+    // 提取公共的坐标计算逻辑
+    getPixelCoordinates(clientX, clientY) {
+      const rect = this.canvas.getBoundingClientRect()
+      const scaleX = this.canvas.width / rect.width
+      const scaleY = this.canvas.height / rect.height
+      const x = Math.floor((clientX - rect.left) * scaleX / this.pixelSize) * this.pixelSize
+      const y = Math.floor((clientY - rect.top) * scaleY / this.pixelSize) * this.pixelSize
+      return { x, y, rect, scaleX, scaleY }
+    },
 
+    // 统一的像素绘制逻辑
+    performPixelAction(x, y) {
       if (!this.currentUserId) {
         this.showLoginModal = true
         return
       }
 
-      if (this.drawingDisabled) {
-        return
-      }
-
-      if (this.isPanning || this.isLoading) return
-
-      const rect = this.canvas.getBoundingClientRect()
-      const scaleX = this.canvas.width / rect.width
-      const scaleY = this.canvas.height / rect.height
-
-      const x = Math.floor((event.clientX - rect.left) * scaleX / this.pixelSize) * this.pixelSize
-      const y = Math.floor((event.clientY - rect.top) * scaleY / this.pixelSize) * this.pixelSize
-
-      if (x < 0 || y < 0 || x >= this.canvas.width || y >= this.canvas.height) {
-        return
-      }
+      if (this.drawingDisabled || this.isPanning || this.isLoading) return
+      if (x < 0 || y < 0 || x >= this.canvas.width || y >= this.canvas.height) return
 
       const key = `${x},${y}`
+      const chunkVariable = this.getPixelChunkVariable(x, y)
+      const existingPixel = chunkVariable.get(key)
 
       if (this.isColorPicking) {
-
-        const existingPixel = this.pixelData.get(key)
-        if (existingPixel) {
-
-          this.selectColor(existingPixel.color)
-
-          this.isColorPicking = false
-        } else {
-
-          const imageData = this.ctx.getImageData(x, y, 1, 1)
-          const data = imageData.data
-          const color = `#${((1 << 24) + (data[0] << 16) + (data[1] << 8) + data[2]).toString(16).slice(1)}`
-          this.selectColor(color)
-
-          this.isColorPicking = false
-        }
-        return
+        const color = existingPixel?.color || this.getPixelColorFromCanvas(x, y)
+        this.selectColor(color)
+        this.isColorPicking = false
       } else if (this.isErasing) {
-
-        const chunkVariable = this.getPixelChunkVariable(x, y)
-        const existingPixel = chunkVariable.get(key)
-
-        if (existingPixel && existingPixel.userId === this.currentUserId) {
-
+        if (existingPixel?.userId === this.currentUserId) {
           chunkVariable.delete(key)
-
           this.userAddedPixels.delete(key)
-
-          this.ctx.clearRect(x, y, this.pixelSize, this.pixelSize)
-          this.drawBackground()
-          this.drawAllPixels()
-
+          this.redrawPixelArea(x, y)
           this.hasUnsavedChanges = this.userAddedPixels.size > 0
-
           this.autoSaveDraft()
         }
-
-        return
       } else {
+        this.addPixel(x, y, chunkVariable, existingPixel)
+      }
+    },
 
-        const chunkVariable = this.getPixelChunkVariable(x, y)
-        const existingPixel = chunkVariable.get(key)
+    // 提取颜色获取逻辑
+    getPixelColorFromCanvas(x, y) {
+      const imageData = this.ctx.getImageData(x, y, 1, 1)
+      const data = imageData.data
+      return `#${((1 << 24) + (data[0] << 16) + (data[1] << 8) + data[2]).toString(16).slice(1)}`
+    },
 
-        if (existingPixel && existingPixel.status === 'cached' && existingPixel.userId === this.currentUserId) {
-          this.ctx.clearRect(x, y, this.pixelSize, this.pixelSize)
+    // 提取重绘逻辑
+    redrawPixelArea(x, y) {
+      this.ctx.clearRect(x, y, this.pixelSize, this.pixelSize)
+      this.drawBackground()
+      this.drawAllPixels()
+    },
 
-          this.ctx.globalAlpha = 1.0
-          if (this.mapImage && this.mapImage.complete) {
-            this.ctx.drawImage(this.mapImage, x, y, this.pixelSize, this.pixelSize, x, y, this.pixelSize, this.pixelSize)
+    // 提取添加像素逻辑
+    addPixel(x, y, chunkVariable, existingPixel) {
+      if (existingPixel?.status === 'cached' && existingPixel.userId === this.currentUserId) {
+        this.ctx.clearRect(x, y, this.pixelSize, this.pixelSize)
+        this.ctx.globalAlpha = 1.0
+        if (this.mapImage?.complete) {
+          this.ctx.drawImage(this.mapImage, x, y, this.pixelSize, this.pixelSize, x, y, this.pixelSize, this.pixelSize)
+        }
+      }
+
+      const pixelInfo = {
+        x, y,
+        color: this.selectedColor,
+        userId: this.currentUserId,
+        timestamp: new Date(),
+        status: 'cached',
+        objectId: null,
+        createdAt: null,
+        updatedAt: null
+      }
+
+      chunkVariable.set(`${x},${y}`, pixelInfo)
+      this.userAddedPixels.set(`${x},${y}`, pixelInfo)
+      this.drawSinglePixel(x, y, this.selectedColor, 'cached')
+      this.hasUnsavedChanges = true
+      this.autoSaveDraft()
+    },
+
+    drawPixel(event) {
+      const { x, y } = this.getPixelCoordinates(event.clientX, event.clientY)
+      this.performPixelAction(x, y)
+    },
+
+    // 统一的预览更新逻辑
+    updatePreview(clientX, clientY, isTouch = false) {
+      const { x, y } = this.getPixelCoordinates(clientX, clientY)
+
+      if (x >= 0 && y >= 0 && x < this.canvas.width && y < this.canvas.height) {
+        if (this.isColorPicking) {
+          this.magnifierPosition = { x: clientX, y: clientY }
+          this.showMagnifier = true
+
+          const chunkVariable = this.getPixelChunkVariable(x, y)
+          const existingPixel = chunkVariable.get(`${x},${y}`)
+          this.colorPreview = existingPixel?.color || this.getPixelColorFromCanvas(x, y)
+          this.showColorPreview = true
+          this.previewPixel.show = false
+          this.pixelTooltip.show = false
+        } else {
+          this.previewPixel = {
+            show: true,
+            x: clientX,
+            y: clientY
+          }
+
+          const chunkVariable = this.getPixelChunkVariable(x, y)
+          const pixelInfo = chunkVariable.get(`${x},${y}`)
+
+          if (pixelInfo) {
+            this.pixelTooltip = {
+              show: true,
+              x: clientX + (isTouch ? 10 : 15),
+              y: clientY + (isTouch ? -30 : 15),
+              pixelX: x,
+              pixelY: y,
+              userId: pixelInfo.userId,
+              isOwnPixel: pixelInfo.userId === this.currentUserId
+            }
+          } else {
+            this.pixelTooltip.show = false
           }
         }
-
-        const pixelInfo = {
-          x: x,
-          y: y,
-          color: this.selectedColor,
-          userId: this.currentUserId,
-          timestamp: new Date(),
-          status: 'cached',
-
-          objectId: null,
-          createdAt: null,
-          updatedAt: null
-        }
-
-        chunkVariable.set(key, pixelInfo)
-
-        this.userAddedPixels.set(key, pixelInfo)
-
-        this.drawSinglePixel(x, y, this.selectedColor, 'cached')
-
-        this.hasUnsavedChanges = true
-
-        this.autoSaveDraft()
+      } else {
+        this.hidePreview()
       }
     },
 
     handleMouseMove(event) {
-      if (this.isPanning || this.isLoading) return
-
-      if (this.isPanning) {
-        this.previewPixel.show = false
-        this.pixelTooltip.show = false
+      if (this.isPanning || this.isLoading) {
+        this.hidePreview()
         return
       }
-
-      const rect = this.canvas.getBoundingClientRect()
-      const scaleX = this.canvas.width / rect.width
-      const scaleY = this.canvas.height / rect.height
-
-      const x = Math.floor((event.clientX - rect.left) * scaleX / this.pixelSize) * this.pixelSize
-      const y = Math.floor((event.clientY - rect.top) * scaleY / this.pixelSize) * this.pixelSize
-
-      if (x >= 0 && y >= 0 && x < this.canvas.width && y < this.canvas.height) {
-
-        if (this.isColorPicking) {
-
-          this.magnifierPosition = {
-            x: event.clientX,
-            y: event.clientY
-          }
-          this.showMagnifier = true
-
-          const key = `${x},${y}`
-          const chunkVariable = this.getPixelChunkVariable(x, y)
-          const existingPixel = chunkVariable.get(key)
-          if (existingPixel) {
-            this.colorPreview = existingPixel.color
-          } else {
-
-            const imageData = this.ctx.getImageData(x, y, 1, 1)
-            const data = imageData.data
-            this.colorPreview = `#${((1 << 24) + (data[0] << 16) + (data[1] << 8) + data[2]).toString(16).slice(1)}`
-          }
-          this.showColorPreview = true
-
-          this.previewPixel.show = false
-          this.pixelTooltip.show = false
-          return
-        }
-
-        this.previewPixel = {
-          show: true,
-          x: event.clientX,
-          y: event.clientY
-        }
-
-        const key = `${x},${y}`
-        const chunkVariable = this.getPixelChunkVariable(x, y)
-        const pixelInfo = chunkVariable.get(key)
-
-        if (pixelInfo) {
-
-          this.pixelTooltip = {
-            show: true,
-            x: event.clientX + 15,
-            y: event.clientY + 15,
-            pixelX: x,
-            pixelY: y,
-            userId: pixelInfo.userId,
-            isOwnPixel: pixelInfo.userId === this.currentUserId
-          }
-        } else {
-          this.pixelTooltip.show = false
-        }
-      } else {
-        this.previewPixel.show = false
-        this.pixelTooltip.show = false
-        this.showColorPreview = false
-        this.showMagnifier = false
-      }
+      this.updatePreview(event.clientX, event.clientY)
     },
 
     hidePreview() {
@@ -1744,88 +1728,90 @@ export default {
     },
 
     checkAndLoadNewChunks() {
-
       const currentVisibleChunks = this.getVisibleChunks()
-
-      const newChunks = currentVisibleChunks.filter(chunkKey => !this.loadedChunks.has(chunkKey))
+      const newChunks = currentVisibleChunks.filter(chunk =>
+        !this.loadedChunks.has(chunk.chunkKey)
+      )
 
       if (newChunks.length > 0) {
-
         this.loadChunks(newChunks)
       }
 
-      this.visibleChunks = new Set(currentVisibleChunks)
+      this.visibleChunks = new Set(currentVisibleChunks.map(chunk => chunk.chunkKey))
     },
 
     async saveChunkData(chunkGroup) {
       const { tableName, pixels } = chunkGroup
-
       const ChunkTable = AV.Object.extend(tableName)
 
-      const coordinates = Array.from(pixels.keys()).map(key => {
+      if (pixels.size === 0) return { savedCount: 0, skippedCount: 0 }
+
+      // 批量查询现有像素，优化查询性能
+      const coordinates = Array.from(pixels.keys(), key => {
         const [x, y] = key.split(',').map(Number)
         return { x, y, key }
       })
 
       const existingPixelsMap = new Map()
 
-      if (coordinates.length > 0) {
-        const orQueries = coordinates.map(coord => {
+      // 分批查询以避免查询限制
+      const batchSize = 100
+      for (let i = 0; i < coordinates.length; i += batchSize) {
+        const batch = coordinates.slice(i, i + batchSize)
+        const orQueries = batch.map(coord => {
           const query = new AV.Query(tableName)
           query.equalTo('x', coord.x)
           query.equalTo('y', coord.y)
           return query
         })
 
-        const compoundQuery = AV.Query.or(...orQueries)
+        if (orQueries.length > 0) {
+          const compoundQuery = AV.Query.or(...orQueries)
+          compoundQuery.limit(1000)
+          const existingPixels = await compoundQuery.find()
 
-        compoundQuery.limit(1000)
-        const existingPixels = await compoundQuery.find()
-
-        existingPixels.forEach(pixel => {
-          const key = `${pixel.get('x')},${pixel.get('y')}`
-          existingPixelsMap.set(key, pixel)
-        })
+          existingPixels.forEach(pixel => {
+            const key = `${pixel.get('x')},${pixel.get('y')}`
+            existingPixelsMap.set(key, pixel)
+          })
+        }
       }
 
       const objectsToSave = []
       let savedCount = 0
       let skippedCount = 0
 
+      // 优化像素处理逻辑
       for (const [key, pixelInfo] of pixels) {
-        const [x, y] = key.split(',').map(Number)
         const existingPixel = existingPixelsMap.get(key)
 
         if (existingPixel) {
-
-          const existingTimestamp = existingPixel.get('timestamp')
-          const newTimestamp = pixelInfo.timestamp
-
-          if (newTimestamp > existingTimestamp) {
-            existingPixel.set('color', pixelInfo.color)
-            existingPixel.set('userId', pixelInfo.userId)
-            existingPixel.set('timestamp', pixelInfo.timestamp)
+          if (pixelInfo.timestamp > existingPixel.get('timestamp')) {
+            existingPixel.set({
+              color: pixelInfo.color,
+              userId: pixelInfo.userId,
+              timestamp: pixelInfo.timestamp
+            })
             objectsToSave.push(existingPixel)
             savedCount++
-
           } else {
             skippedCount++
-
           }
         } else {
-
+          const [x, y] = key.split(',').map(Number)
           const pixelRecord = new ChunkTable()
-          pixelRecord.set('x', x)
-          pixelRecord.set('y', y)
-          pixelRecord.set('color', pixelInfo.color)
-          pixelRecord.set('userId', pixelInfo.userId)
-          pixelRecord.set('timestamp', pixelInfo.timestamp)
+          pixelRecord.set({
+            x, y,
+            color: pixelInfo.color,
+            userId: pixelInfo.userId,
+            timestamp: pixelInfo.timestamp
+          })
           objectsToSave.push(pixelRecord)
           savedCount++
-
         }
       }
 
+      // 批量保存
       if (objectsToSave.length > 0) {
         await AV.Object.saveAll(objectsToSave)
       }
@@ -2173,41 +2159,7 @@ export default {
       event.preventDefault()
       if (event.touches.length === 1 && !this.touchState.isPanningTouch) {
         const touch = event.touches[0]
-        const rect = this.canvas.getBoundingClientRect()
-        const scaleX = this.canvas.width / rect.width
-        const scaleY = this.canvas.height / rect.height
-
-        const x = Math.floor((touch.clientX - rect.left) * scaleX / this.pixelSize) * this.pixelSize
-        const y = Math.floor((touch.clientY - rect.top) * scaleY / this.pixelSize) * this.pixelSize
-
-        if (x >= 0 && y >= 0 && x < this.canvas.width && y < this.canvas.height) {
-
-          this.previewPixel = {
-            show: true,
-            x: x / scaleX + rect.left,
-            y: y / scaleY + rect.top
-          }
-
-          const key = `${x},${y}`
-          const pixelInfo = this.pixelData.get(key)
-
-          if (pixelInfo) {
-            this.pixelTooltip = {
-              show: true,
-              x: touch.clientX + 10,
-              y: touch.clientY - 30,
-              pixelX: x,
-              pixelY: y,
-              userId: pixelInfo.userId,
-              isOwnPixel: pixelInfo.userId === this.currentUserId
-            }
-          } else {
-            this.pixelTooltip.show = false
-          }
-        } else {
-          this.previewPixel.show = false
-          this.pixelTooltip.show = false
-        }
+        this.updatePreview(touch.clientX, touch.clientY, true)
       }
     },
 
@@ -2223,47 +2175,14 @@ export default {
     },
 
     drawPixelFromTouch(touch) {
+      const { x, y } = this.getPixelCoordinates(touch.clientX, touch.clientY)
 
-      if (!this.currentUserId) {
-        this.showLoginModal = true
-        return
-      }
-
-      if (this.drawingDisabled) {
-        return
-      }
-
-      if (this.isLoading) return
-
-      const rect = this.canvas.getBoundingClientRect()
-      const scaleX = this.canvas.width / rect.width
-      const scaleY = this.canvas.height / rect.height
-
-      const x = Math.floor((touch.clientX - rect.left) * scaleX / this.pixelSize) * this.pixelSize
-      const y = Math.floor((touch.clientY - rect.top) * scaleY / this.pixelSize) * this.pixelSize
-
-      if (x < 0 || y < 0 || x >= this.canvas.width || y >= this.canvas.height) {
-        return
-      }
-
-      const key = `${x},${y}`
-      const chunkVariable = this.getPixelChunkVariable(x, y)
-      const existingPixel = chunkVariable.get(key)
-
+      // 特殊处理触摸擦除时的错误提示
       if (this.isErasing) {
+        const chunkVariable = this.getPixelChunkVariable(x, y)
+        const existingPixel = chunkVariable.get(`${x},${y}`)
 
-        if (existingPixel && existingPixel.userId === this.currentUserId) {
-          chunkVariable.delete(key)
-
-          this.userAddedPixels.delete(key)
-
-          this.ctx.clearRect(x, y, this.pixelSize, this.pixelSize)
-          this.drawBackground()
-          this.drawAllPixels()
-
-          this.hasUnsavedChanges = this.userAddedPixels.size > 0
-        } else if (existingPixel) {
-
+        if (existingPixel && existingPixel.userId !== this.currentUserId) {
           this.showError(
             this.$t('errorOccurred'),
             this.$t('cannotEraseOthersPixels'),
@@ -2271,39 +2190,9 @@ export default {
           )
           return
         }
-      } else {
-
-        if (existingPixel && existingPixel.status === 'cached' && existingPixel.userId === this.currentUserId) {
-          this.ctx.clearRect(x, y, this.pixelSize, this.pixelSize)
-
-          this.ctx.globalAlpha = 1.0
-          if (this.mapImage && this.mapImage.complete) {
-            this.ctx.drawImage(this.mapImage, x, y, this.pixelSize, this.pixelSize, x, y, this.pixelSize, this.pixelSize)
-          }
-        }
-
-        const pixelInfo = {
-          x: x,
-          y: y,
-          color: this.selectedColor,
-          userId: this.currentUserId,
-          timestamp: new Date(),
-          status: 'cached',
-
-          objectId: null,
-          createdAt: null,
-          updatedAt: null
-        }
-
-        chunkVariable.set(key, pixelInfo)
-
-        this.userAddedPixels.set(key, pixelInfo)
-        this.drawSinglePixel(x, y, this.selectedColor, 'cached')
-
-        this.hasUnsavedChanges = true
-
-        this.autoSaveDraft()
       }
+
+      this.performPixelAction(x, y)
     }
 
   }
